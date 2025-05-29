@@ -5,7 +5,7 @@ Use these scripts to help import a Postgres database to Vitess/MySQL on PlanetSc
 ## [postgres-planetscale](./postgres-planetscale)
 
 Scripts to go directly from a Postgres database to PlanetScale leveraging Amazon DMS.
-This scrips has some speed limitations and is only recommended for databases 100GB or less.
+This script has some speed limitations and is only recommended for databases 100GB or less.
 
 ## [postgres-mysql-planetscale](./postgres-mysql-planetscale)
 
