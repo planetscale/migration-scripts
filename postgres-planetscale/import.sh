@@ -78,7 +78,6 @@ chmod 600 "$TMP/my.cnf"
 
 ENGINE_VERSION="3.5.4" # <https://repost.aws/questions/QU0yHDr_2aRrOZ3dm2dPxYqA/dms-support-for-postgres-17>
 INSTANCE_TYPE="dms.c6i.large"
-SECURITY_GROUP_ID="sg-060268212560188ba" # rcrowley in us-east-1 playground
 
 if [ "$DEBUG" ]; then
     set -x
@@ -197,8 +196,7 @@ REPLICATION_INSTANCE_ARN="$(
         --query 'ReplicationInstance.ReplicationInstanceArn' \
         --replication-instance-class "$INSTANCE_TYPE" \
         --replication-instance-identifier "$IDENTIFIER" \
-        --replication-subnet-group-identifier "$IDENTIFIER" \
-        --vpc-security-group-ids "$SECURITY_GROUP_ID" ||
+        --replication-subnet-group-identifier "$IDENTIFIER" ||
     aws dms describe-replication-instances \
         --filters Name="replication-instance-id",Values="$IDENTIFIER" \
         --output "text" \
@@ -214,8 +212,7 @@ aws dms modify-replication-instance \
     --query 'ReplicationInstance.ReplicationInstanceArn' \
     --replication-instance-arn "$REPLICATION_INSTANCE_ARN" \
     --replication-instance-class "$INSTANCE_TYPE" \
-    --replication-instance-identifier "$IDENTIFIER" \
-    --vpc-security-group-ids "$SECURITY_GROUP_ID"
+    --replication-instance-identifier "$IDENTIFIER"
 aws dms wait replication-instance-available \
     --filters Name="replication-instance-arn",Values="$REPLICATION_INSTANCE_ARN"
 
