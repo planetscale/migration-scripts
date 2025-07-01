@@ -1,27 +1,25 @@
 set -e
 
-DEBUG=""
-
 usage() {
-    printf "Usage: sh %s --identifier \e[4midentifier\e[0m [--task-only] [--debug]\n" "$(basename "$0")" >&2
+    printf "Usage: sh %s [--debug] --identifier \e[4midentifier\e[0m [--task-only]\n" "$(basename "$0")" >&2
+    printf "  --debug                  enable debug mode with verbose command output\n" >&2
     printf "  --identifier \e[4midentifier\e[0m  unique identifier for AWS DMS resources\n" >&2
     printf "  --task-only              only cleanup the replication task, leaving the replication instance and endpoints for reuse\n" >&2
-    printf "  --debug                  enable debug mode with verbose command output\n" >&2
     exit "$1"
 }
 
-IDENTIFIER="" TASK_ONLY="" DEBUG=""
+DEBUG="" IDENTIFIER="" TASK_ONLY=""
 while [ "$#" -gt 0 ]
 do
     case "$1" in
+
+        "--debug") DEBUG="$1" shift;;
 
         "-i"|"--id"|"--identifier") IDENTIFIER="$2" shift 2;;
         "-i"*) IDENTIFIER="$(echo "$1" | cut -c"3-")" shift;;
         "--id="*|"--identifier="*) IDENTIFIER="$(echo "$1" | cut -d"=" -f"2-")" shift;;
 
         "-t"|"--task-only") TASK_ONLY="$1" shift;;
-
-        "--debug") DEBUG="$1" shift;;
 
         "-h"|"--help") usage 0;;
         *) usage 1;;
@@ -31,8 +29,8 @@ if [ -z "$IDENTIFIER" ]
 then usage 1
 fi
 
-if [ "$DEBUG" ]; then
-    set -x
+if [ "$DEBUG" ]
+then set -x
 fi
 
 echo "Starting cleanup process..."
