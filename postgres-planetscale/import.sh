@@ -3,21 +3,21 @@ set -e
 TMP="$(mktemp -d)"
 trap "rm -f -r \"$TMP\"" EXIT INT QUIT TERM
 
-DEBUG=""
-
 usage() {
-    printf "Usage: sh %s --identifier \e[4midentifier\e[0m [--init-only] [--debug] --source \e[4musername\e[0m:\e[4mpassword\e[0m@\e[4mhostname\e[0m/\e[4mdatabase\e[0m/\e[4mschema\e[0m [--table-mappings \e[4mfilename\e[0m] --target \e[4musername\e[0m:\e[4mpassword\e[0m@\e[4mhostname\e[0m/\e[4mdatabase\e[0m [--tls]\n" "$(basename "$0")" >&2
-    printf "  --identifier \e[4midentifier\e[0m                              unique identifier for AWS DMS resources\n" >&2
-    printf "  --init-only                                          exit after initializing the endpoints and replication instance, before creating the replication task\n" >&2
+    printf "Usage: sh %s [--debug] --identifier \e[4midentifier\e[0m [--init-only] --source \e[4musername\e[0m:\e[4mpassword\e[0m@\e[4mhostname\e[0m/\e[4mdatabase\e[0m/\e[4mschema\e[0m [--source-type \e[4mtype\e[0m] [--table-mappings \e[4mfilename\e[0m] --target \e[4musername\e[0m:\e[4mpassword\e[0m@\e[4mhostname\e[0m/\e[4mdatabase\e[0m[/\e[4mschema\e[0m] [--target-type \e[4mtype\e[0m] [--tls]\n" "$(basename "$0")" >&2
     printf "  --debug                                                enable debug mode with verbose command output\n" >&2
-    printf "  --source \e[4musername\e[0m:\e[4mpassword\e[0m@\e[4mhostname\e[0m/\e[4mdatabase\e[0m/\e[4mschema\e[0m  connection parameters for the source Postgres database\n" >&2
-    printf "  --target \e[4musername\e[0m:\e[4mpassword\e[0m@\e[4mhostname\e[0m/\e[4mdatabase\e[0m         connection parameters for the target MySQL database\n" >&2
-    printf "  --table-mappings \e[4mfilename\e[0m                            JSON file containing custom table mappings; see <https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TableMapping.html>\n" >&2
-    printf "  --tls                                                use TLS to connect to the source Postgres database (the PlanetScale target always uses TLS)\n" >&2
+    printf "  --identifier \e[4midentifier\e[0m                                unique identifier for AWS DMS resources\n" >&2
+    printf "  --init-only                                            exit after initializing the endpoints and replication instance, before creating the replication task\n" >&2
+    printf "  --source \e[4musername\e[0m:\e[4mpassword\e[0m@\e[4mhostname\e[0m/\e[4mdatabase\e[0m/\e[4mschema\e[0m    connection parameters for the source Postgres database\n" >&2
+    printf "  --source-type \e[4mtype\e[0m                                     \"mysql\" (not yet supported) or \"postgres\" (default)\n" >&2
+    printf "  --target \e[4musername\e[0m:\e[4mpassword\e[0m@\e[4mhostname\e[0m/\e[4mdatabase\e[0m[/\e[4mschema\e[0m]  connection parameters for the target MySQL or Postgres database\n" >&2
+    printf "  --target-type \e[4mtype\e[0m                                     \"mysql\" or \"postgres\" (default)\n" >&2
+    printf "  --table-mappings \e[4mfilename\e[0m                              JSON file containing custom table mappings; see <https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.CustomizingTasks.TableMapping.html>\n" >&2
+    printf "  --tls                                                  use TLS to connect to the source Postgres database (the PlanetScale target always uses TLS)\n" >&2
     exit "$1"
 }
 
-IDENTIFIER="" INIT_ONLY="" DEBUG="" SOURCE="" SSL_MODE="none" TABLE_MAPPINGS="" TARGET=""
+DEBUG="" IDENTIFIER="" INIT_ONLY="" SOURCE="" SOURCE_TYPE="postgres" SSL_MODE="none" TABLE_MAPPINGS="" TARGET="" TARGET_TYPE="postgres"
 while [ "$#" -gt 0 ]
 do
     case "$1" in
@@ -28,11 +28,12 @@ do
 
         "--init-only") INIT_ONLY="$1" shift;;
 
-        "--debug") DEBUG="$1" shift;;
-
         "-s"|"--source") SOURCE="$2" shift 2;;
         "-s"*) SOURCE="$(echo "$1" | cut -c"3-")" shift;;
         "--source="*) SOURCE="$(echo "$1" | cut -d"=" -f"2-")" shift;;
+
+        "--source-type") SOURCE_TYPE="$2" shift 2;;
+        "--source-type="*) SOURCE_TYPE="$(echo "$1" | cut -d"=" -f"2-")" shift;;
 
         "--table-mappings") TABLE_MAPPINGS="$2" shift 2;;
         "--table-mappings="*) TABLE_MAPPINGS="$(echo "$1" | cut -d"=" -f"2-")" shift;;
@@ -41,13 +42,16 @@ do
         "-t"*) TARGET="$(echo "$1" | cut -c"3-")" shift;;
         "--target="*) TARGET="$(echo "$1" | cut -d"=" -f"2-")" shift;;
 
+        "--target-type") TARGET_TYPE="$2" shift 2;;
+        "--target-type="*) TARGET_TYPE="$(echo "$1" | cut -d"=" -f"2-")" shift;;
+
         "--tls") SSL_MODE="require" shift;;
 
         "-h"|"--help") usage 0;;
         *) usage 1;;
     esac
 done
-if [ -z "$IDENTIFIER" -o -z "$SOURCE" -o -z "$TARGET" ]
+if [ -z "$IDENTIFIER" -o -z "$SOURCE" -o -z "$SOURCE_TYPE" -o -z "$TARGET" -o -z "$TARGET_TYPE" ]
 then usage 1
 fi
 if ! echo "$SOURCE" | grep -E -q '^[^:@/]+:[^:@]+@[^:@/]+/[^:@/]+/[^:@/]+$'
@@ -58,30 +62,53 @@ SOURCE_PASSWORD="$(echo "$SOURCE" | cut -d":" -f"2" | cut -d"@" -f"1")"
 SOURCE_HOSTNAME="$(echo "$SOURCE" | cut -d"@" -f"2" | cut -d"/" -f"1")"
 SOURCE_DATABASE="$(echo "$SOURCE" | cut -d"/" -f"2")"
 SOURCE_SCHEMA="$(echo "$SOURCE" | cut -d"/" -f"3")"
-grep -q "$SOURCE_HOSTNAME:5432:$SOURCE_DATABASE:$SOURCE_USERNAME:$SOURCE_PASSWORD" "$HOME/.pgpass" ||
-echo "$SOURCE_HOSTNAME:5432:$SOURCE_DATABASE:$SOURCE_USERNAME:$SOURCE_PASSWORD" >>"$HOME/.pgpass"
-chmod 600 "$HOME/.pgpass"
+case "$SOURCE_TYPE" in
+    "postgres")
+        SOURCE_PORT="5432"
+        touch "$HOME/.pgpass"
+        chmod 600 "$HOME/.pgpass"
+        grep -q "$SOURCE_HOSTNAME:$SOURCE_PORT:$SOURCE_DATABASE:$SOURCE_USERNAME:$SOURCE_PASSWORD" "$HOME/.pgpass" ||
+        echo "$SOURCE_HOSTNAME:$SOURCE_PORT:$SOURCE_DATABASE:$SOURCE_USERNAME:$SOURCE_PASSWORD" >>"$HOME/.pgpass";;
+    *)
+        echo "--source-type \"$SOURCE_TYPE\" not supported" >&2
+        exit 1;;
+esac
 if [ "$TABLE_MAPPINGS" -a ! -f "$TABLE_MAPPINGS" ]
 then
     echo "$TABLE_MAPPINGS: file not found" >&2
     exit 1
 fi
-if ! echo "$TARGET" | grep -E -q '^[^:@/]+:[^:@]+@[^:@/]+/[^:@/]+$'
+if ! echo "$TARGET" | grep -E -q '^[^:@/]+:[^:@]+@[^:@/]+/[^:@/]+(/[^:@/]+)?$'
 then usage 1
 fi
 TARGET_USERNAME="$(echo "$TARGET" | cut -d":" -f"1")"
 TARGET_PASSWORD="$(echo "$TARGET" | cut -d":" -f"2" | cut -d"@" -f"1")"
 TARGET_HOSTNAME="$(echo "$TARGET" | cut -d"@" -f"2" | cut -d"/" -f"1")"
 TARGET_DATABASE="$(echo "$TARGET" | cut -d"/" -f"2")"
-printf "[client]\npassword=$TARGET_PASSWORD\n" >"$TMP/my.cnf"
-chmod 600 "$TMP/my.cnf"
+TARGET_SCHEMA="$(echo "$TARGET" | cut -d"/" -f"3")"
+case "$TARGET_TYPE" in
+    "mysql")
+        TARGET_PORT="3306" TARGET_SCHEMA="$TARGET_DATABASE"
+        touch "$TMP/my.cnf"
+        chmod 600 "$TMP/my.cnf"
+        printf "[client]\npassword=$TARGET_PASSWORD\n" >"$TMP/my.cnf";;
+    "postgres")
+        TARGET_PORT="5432"
+        touch "$HOME/.pgpass"
+        chmod 600 "$HOME/.pgpass"
+        grep -q "$TARGET_HOSTNAME:$TARGET_PORT:$TARGET_DATABASE:$TARGET_USERNAME:$TARGET_PASSWORD" "$HOME/.pgpass" ||
+        echo "$TARGET_HOSTNAME:$TARGET_PORT:$TARGET_DATABASE:$TARGET_USERNAME:$TARGET_PASSWORD" >>"$HOME/.pgpass";;
+    *)
+        echo "--target-type \"$TARGET_TYPE\" not supported" >&2
+        exit 1;;
+esac
 
 ENGINE_VERSION="3.5.4" # <https://repost.aws/questions/QU0yHDr_2aRrOZ3dm2dPxYqA/dms-support-for-postgres-17>
 INSTANCE_TYPE="dms.c6i.large"
 SECURITY_GROUP_ID="sg-060268212560188ba" # rcrowley in us-east-1 playground
 
-if [ "$DEBUG" ]; then
-    set -x
+if [ "$DEBUG" ]
+then set -x
 fi
 
 echo "Creating tracking table in source database..."
@@ -104,7 +131,7 @@ SOURCE_ENDPOINT_ARN="$(
             then echo "endpoint=$(echo "$SOURCE_HOSTNAME" | cut -d"." -f"1")\$"
             fi
         )$SOURCE_PASSWORD" \
-        --port "5432" \
+        --port "$SOURCE_PORT" \
         --postgre-sql-settings '{"CaptureDdls":false,"PluginName":"test_decoding"}' \
         --query 'Endpoint.EndpointArn' \
         --server-name "$SOURCE_HOSTNAME" \
@@ -128,7 +155,7 @@ aws dms modify-endpoint \
         then echo "endpoint=$(echo "$SOURCE_HOSTNAME" | cut -d"." -f"1")\$"
         fi
     )$SOURCE_PASSWORD" \
-    --port "5432" \
+    --port "$SOURCE_PORT" \
     --postgre-sql-settings '{"CaptureDdls":false,"PluginName":"test_decoding"}' \
     --query 'Endpoint.EndpointArn' \
     --server-name "$SOURCE_HOSTNAME" \
@@ -136,15 +163,18 @@ aws dms modify-endpoint \
     --username "$SOURCE_USERNAME"
 TARGET_ENDPOINT_ARN="$(
     aws dms create-endpoint \
+        $([ "$TARGET_TYPE" = "postgres" ] && echo "--database-name" "$TARGET_DATABASE") \
         --endpoint-identifier "$IDENTIFIER-target" \
         --endpoint-type "target" \
-        --engine-name "mysql" \
-        --extra-connection-attributes "Initstmt=SET FOREIGN_KEY_CHECKS=0;loadUsingCSV=false;parallelLoadThreads=16;" \
+        --engine-name "$TARGET_TYPE" \
+        --extra-connection-attributes "$([ "$TARGET_TYPE" = "mysql" ] && echo "Initstmt=SET FOREIGN_KEY_CHECKS=0;")loadUsingCSV=false;parallelLoadThreads=16;" \
         --output "text" \
         --password "$TARGET_PASSWORD" \
-        --port "3306" \
+        --port "$TARGET_PORT" \
+        --postgre-sql-settings "{$([ "$TARGET_TYPE" = "postgres" ] && echo '"AfterConnectScript":"SET session_replication_role=replica;"')}" \
         --query 'Endpoint.EndpointArn' \
         --server-name "$TARGET_HOSTNAME" \
+        --ssl-mode "$([ "$TARGET_TYPE" = "mysql" ] && echo "none" || echo "$SSL_MODE")" \
         --username "$TARGET_USERNAME" ||
     aws dms describe-endpoints \
         --filters Name="endpoint-id",Values="$IDENTIFIER-target" \
@@ -153,16 +183,19 @@ TARGET_ENDPOINT_ARN="$(
 )"
 [ "$TARGET_ENDPOINT_ARN" ]
 aws dms modify-endpoint \
+    $([ "$TARGET_TYPE" = "postgres" ] && echo "--database-name" "$TARGET_DATABASE") \
     --endpoint-arn "$TARGET_ENDPOINT_ARN" \
     --endpoint-identifier "$IDENTIFIER-target" \
     --endpoint-type "target" \
-    --engine-name "mysql" \
-    --extra-connection-attributes "Initstmt=SET FOREIGN_KEY_CHECKS=0;loadUsingCSV=false;parallelLoadThreads=16;" \
+    --engine-name "$TARGET_TYPE" \
+    --extra-connection-attributes "$([ "$TARGET_TYPE" = "mysql" ] && echo "Initstmt=SET FOREIGN_KEY_CHECKS=0;")loadUsingCSV=false;parallelLoadThreads=16;" \
     --output "text" \
     --password "$TARGET_PASSWORD" \
-    --port "3306" \
+    --port "$TARGET_PORT" \
+    --postgre-sql-settings "{$([ "$TARGET_TYPE" = "postgres" ] && echo '"AfterConnectScript":"SET session_replication_role=replica;"')}" \
     --query 'Endpoint.EndpointArn' \
     --server-name "$TARGET_HOSTNAME" \
+    --ssl-mode "$([ "$TARGET_TYPE" = "mysql" ] && echo "none" || echo "$SSL_MODE")" \
     --username "$TARGET_USERNAME"
 
 echo "Creating replication subnet group..."
@@ -326,7 +359,7 @@ tee "$TMP/table-mappings.json" <<EOF
             "rule-name": "include-all",
             "rule-type": "selection"
 EOF
-if [ "$SOURCE_SCHEMA" != "$TARGET_DATABASE" ]
+if [ "$SOURCE_SCHEMA" != "$TARGET_SCHEMA" -a "$TARGET_SCHEMA" ]
 then tee -a "$TMP/table-mappings.json" <<EOF
         },
         {
@@ -339,7 +372,7 @@ then tee -a "$TMP/table-mappings.json" <<EOF
             "rule-name": "rename-schema",
             "rule-target": "schema",
             "rule-type": "transformation",
-            "value": "$TARGET_DATABASE"
+            "value": "$TARGET_SCHEMA"
 EOF
 fi
 tee -a "$TMP/table-mappings.json" <<EOF
@@ -417,11 +450,10 @@ aws dms wait replication-task-running \
     --filters Name="replication-task-arn",Values="$REPLICATION_TASK_ARN"
 
 aws dms describe-replication-tasks \
-    --filters Name="replication-task-arn",Values="$REPLICATION_TASK_ARN" | grep -q "running" || { echo "Task not running"; exit 1; }
+    --filters Name="replication-task-arn",Values="$REPLICATION_TASK_ARN" |
+jq -e '.'
 
-if [ "$DEBUG" ]; then
-    set +x
-fi
+set +x
 
 echo >&2
 echo "It's time to swing all your write traffic from the source database to the target database." >&2
@@ -436,7 +468,10 @@ echo "Waiting for replication marker to appear in target database..."
 while sleep 1
 do
     if echo "SELECT * FROM _planetscale_import WHERE ts = $TS_REPLICATING AND status = 'replicating';" |
-    mysql --defaults-extra-file="$TMP/my.cnf" -h"$TARGET_HOSTNAME" -u"$TARGET_USERNAME" "$TARGET_DATABASE" |
+    case "$TARGET_TYPE" in
+        "mysql") mysql --defaults-extra-file="$TMP/my.cnf" -h"$TARGET_HOSTNAME" -u"$TARGET_USERNAME" "$TARGET_DATABASE";;
+        "postgres") psql -d"$TARGET_DATABASE" -h"$TARGET_HOSTNAME" -U"$TARGET_USERNAME";;
+    esac |
     grep -q "replicating"
     then break
     fi
@@ -444,7 +479,10 @@ done
 
 echo >&2
 echo "Timestamps and statuses from this migration:" >&2
-mysql --defaults-extra-file="$TMP/my.cnf" -h"$TARGET_HOSTNAME" -u"$TARGET_USERNAME" "$TARGET_DATABASE" <<EOF
+case "$TARGET_TYPE" in
+    "mysql") mysql --defaults-extra-file="$TMP/my.cnf" -h"$TARGET_HOSTNAME" -u"$TARGET_USERNAME" "$TARGET_DATABASE";;
+    "postgres") psql -a -d"$TARGET_DATABASE" -h"$TARGET_HOSTNAME" -U"$TARGET_USERNAME";;
+esac <<EOF
 SELECT * FROM _planetscale_import WHERE ts >= $TS_INITIALIZING;
 EOF
 
