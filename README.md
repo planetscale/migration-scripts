@@ -1,18 +1,16 @@
-# Import scripts
+# Migration scripts for moving into PlanetScale
 
-Use these scripts to help import a Postgres database to Vitess/MySQL on PlanetScale.
+Use these scripts to migrate a Postgres database to PlanetScale for Postgres or Vitess/MySQL.
 
-## [postgres-planetscale](./postgres-planetscale)
+## [Postgres directly to PlanetScale for Postgres](./postgres-direct)
 
-Scripts to go from a Postgres database to PlanetScale leveraging Amazon DMS.
-This script has some speed limitations and is only recommended for databases 100GB or less.
+This direct migration uses logical replication and, optionally, a proxy which can manage connections and sequences for a zero-downtime migration.
 
-## [postgres-mysql-planetscale](./postgres-mysql-planetscale)
+## [Postgres to PlanetScale for Postgres or Vitess/MySQL via AWS DMS](./postgres-planetscale)
 
-Scripts for migrating from Postgres to PlanetScale with Amazon DMS and an intermediate Amazon MySQL database.
-This runs faster than the above, but has the downside of requiring an additional MySQL instance running during the migration, which adds cost and complexity to the import.
+This has some speed limitations and is only recommended for databases 100GB or less.
+
+## [Postgres to PlanetScale for Vitess/MySQL via AWS DMS and an intermediate MySQL](./postgres-mysql-planetscale)
+
+Thanks to the intermediate MySQL database, this runs faster than the variant above, but has the downside of requiring an additional MySQL instance running during the migration, which adds cost and complexity to the import.
 Recommended for larger imports > 100GB.
-
-## [postgres-direct](./postgres-direct)
-
-Scripts for going directly from any Postgres database to a PlanetScale for Postgres database using logical replication and, optionally, a proxy which can manage connections and sequences for a zero-downtime migration.
