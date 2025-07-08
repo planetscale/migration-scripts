@@ -58,6 +58,7 @@ psql "$PROXY" -c "
     BEGIN;
     ALTER SERVER _planetscale_import OPTIONS (SET host '$SERVER_HOSTNAME', SET port '$SERVER_PORT', SET dbname '$SERVER_DATABASE');
     ALTER USER MAPPING FOR $PG_USERNAME SERVER _planetscale_import OPTIONS (SET user '$SERVER_USERNAME', SET password '$SERVER_PASSWORD');
+    SELECT postgres_fdw_disconnect('_planetscale_import');
     COMMIT;
 "
 
