@@ -30,38 +30,75 @@ fi
 
 export PSQL_PAGER=""
 
-set -x
-
 # Inspect the schema on the primary and replica.
-psql "$PRIMARY" -c '\d'
-psql "$REPLICA" -c '\d'
+echo >&2
+echo "##############################" >&2
+echo "# PRIMARY AND REPLICA SCHEMA #" >&2
+echo "##############################" >&2
+echo >&2
+(
+    set -x
+    psql "$PRIMARY" -c '\d'
+    psql "$REPLICA" -c '\d'
+)
+echo >&2
 
-# Inspect all Postgres' internal replication status information.
-psql "$PRIMARY" -c "SELECT * FROM pg_stat_replication;" -x
-psql "$PRIMARY" -c "SELECT * FROM pg_replication_slots;" -x
-psql "$PRIMARY" -c "SELECT slot_name, slot_type, active, pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) FROM pg_replication_slots;"
-psql "$REPLICA" -c "SELECT * FROM pg_stat_wal_receiver;" -x || : # not supported in Aurora 13
-psql "$REPLICA" -c "SELECT * FROM pg_catalog.pg_stat_subscription;" -x
-
-# Do a sloppy distributed transaction to figure out how far behind we are.
-psql "$PRIMARY" -c "SELECT pg_current_wal_lsn();"
-psql "$REPLICA" -c "SELECT received_lsn FROM pg_stat_subscription WHERE subname = '_planetscale_import';"
-PRIMARY_LSN="$(psql "$PRIMARY" -A -c "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0');" -t)"
-REPLICA_LSN="$(psql "$REPLICA" -A -c "SELECT pg_wal_lsn_diff(received_lsn, '0/0') FROM pg_stat_subscription WHERE subname = '_planetscale_import';" -t)"
-LAG="$((PRIMARY_LSN - REPLICA_LSN))" # bytes behind
-set +x
-if [ "$LAG" -lt "1024" ]
-then printf "replication is caught up"
-else printf "replication is behind"
-fi
-echo "; lag: $LAG, primary LSN: $PRIMARY_LSN, replica LSN: $REPLICA_LSN"
-set -x
+# Inspect Postgres' internal logical replication status information.
+echo >&2
+echo "######################" >&2
+echo "# REPLICATION STATUS #" >&2
+echo "######################" >&2
+echo >&2
+(
+    set -x
+    psql "$PRIMARY" -a -x <<EOF
+SELECT * FROM pg_stat_replication WHERE application_name = '_planetscale_import';
+SELECT
+    active, inactive_since, invalidation_reason, wal_status,
+    confirmed_flush_lsn, pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)
+    FROM pg_replication_slots WHERE slot_name = '_planetscale_import';
+EOF
+    psql "$REPLICA" -a -x <<EOF
+SELECT * FROM pg_catalog.pg_stat_subscription WHERE subname = '_planetscale_import';
+\x
+SELECT
+    n.nspname,
+    c.relname,
+    sr.srsubstate,
+    CASE
+        WHEN sr.srsubstate = 'i' THEN 'initializing'
+        WHEN sr.srsubstate = 'd' THEN 'data is being copied'
+        WHEN sr.srsubstate = 'f' THEN 'finished table copy'
+        WHEN sr.srsubstate = 's' THEN 'synchronized'
+        WHEN sr.srsubstate = 'r' THEN 'ready (normal replication)'
+        ELSE ''
+    END AS srsubstate_explain,
+    sr.srsublsn
+    FROM pg_subscription s
+    JOIN pg_subscription_rel sr ON s.oid = sr.srsubid
+    JOIN pg_class c ON c.oid = sr.srrelid
+    JOIN pg_namespace n ON c.relnamespace = n.oid
+    WHERE s.subname = '_planetscale_import';
+EOF
+)
+echo >&2
 
 # Send a sentinel write through the logical replication stream.
-TS="$(date +"%s")"
-psql "$PRIMARY" -c "INSERT INTO _planetscale_import VALUES ($TS, 'testing');"
-sleep 1
-psql "$REPLICA" -c "SELECT * FROM _planetscale_import WHERE ts >= $TS;"
+echo >&2
+echo "###############" >&2
+echo "# TEST RECORD #" >&2
+echo "###############" >&2
+echo >&2
+(
+    set -x
+    TS="$(date +"%s")"
+    psql "$PRIMARY" -c "INSERT INTO _planetscale_import VALUES ($TS, 'testing');"
+    sleep 1
+    psql "$REPLICA" -c "SELECT * FROM _planetscale_import WHERE ts >= $TS;"
+)
+echo >&2
 
+# Uncomment for ad-hoc psql shells.
+echo >&2
 #psql "$PRIMARY"
 #psql "$REPLICA"
