@@ -42,7 +42,7 @@ then
     echo "primary wal_level != logical" >&2
     exit 1
 fi
-psql "$PRIMARY" -c "CREATE PUBLICATION _planetscale_import;"
+psql "$PRIMARY" -c "CREATE PUBLICATION _planetscale_import;" || :
 psql "$PRIMARY" -A -c '\dt' -t |
 cut -d "|" -f "2" |
 while read TABLE
