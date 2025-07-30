@@ -8,7 +8,7 @@ All of these tools provide a usage message when run without arguments.
 Migrating data via logical replication
 --------------------------------------
 
-First, enable logical replication in your source Postgres database. In Amazon Aurora this is the `rds.logical_replication` parameter in the database cluster parameter group (and takes a while to apply, even if you apply immediately). In Neon this is a database-level setting. Alas, in Heroku this is not supported at all. Then, use the tools as follows:
+First, enable logical replication in your source Postgres database. In Amazon Aurora this is the `rds.logical_replication` parameter in the database cluster parameter group (and takes a while to apply, even if you apply immediately). In Google CloudSQL this is the `cloudsql.enable_pglogical` setting (and note that this does _not_ require `CREATE EXTENSION pglogical;`). In Neon this is a database-level setting. Alas, in Heroku this is not supported at all. Then, use the tools as follows:
 
 Second, ensure there is network connectivity from the Internet to your database so that PlanetScale can reach it. In most hosts this is trivially the case. In AWS, you will need to ensure your Aurora or RDS _instance_ (not your Aurora _cluster_) allows public connectivity, its security group allows public connectivity, and its subnets' routing table(s) have a route from the Internet via an Internet Gateway.
 
