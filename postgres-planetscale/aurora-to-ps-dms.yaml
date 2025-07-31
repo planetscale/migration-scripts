@@ -1,0 +1,1487 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS DMS Infrastructure for Aurora PostgreSQL to PlanetScale PostgreSQL Migration'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "VPC Information"
+        Parameters:
+          - VpcId
+          - SubnetIds
+      - Label:
+          default: "Source Database (Aurora PostgreSQL)"
+        Parameters:
+          - SourceEndpointHost
+          - SourceEndpointPort
+          - SourceDatabaseName
+          - SourceUsername
+          - SourcePassword
+      - Label:
+          default: "Target Database (PlanetScale PostgreSQL)"
+        Parameters:
+          - TargetEndpointHost
+          - TargetEndpointPort
+          - TargetDatabaseName
+          - TargetUsername
+          - TargetPassword
+      - Label:
+          default: "Additional Features"
+        Parameters:
+          - DMSInstanceClass
+          - MigrationType
+          - EnableAutomation
+          - CreateDMSRoles
+          - NotificationEmail
+    ParameterLabels:
+      VpcId:
+        default: "VPC ID"
+      SubnetIds:
+        default: "Subnet IDs"
+      DMSInstanceClass:
+        default: "DMS Instance Class"
+      SourceEndpointHost:
+        default: "Source Endpoint Host"
+      SourceEndpointPort:
+        default: "Source Port"
+      SourceDatabaseName:
+        default: "Source Database Name"
+      SourceUsername:
+        default: "Source Username"
+      SourcePassword:
+        default: "Source Password"
+      TargetEndpointHost:
+        default: "Target Endpoint Host"
+      TargetEndpointPort:
+        default: "Target Port"
+      TargetDatabaseName:
+        default: "Target Database Name"
+      TargetUsername:
+        default: "Target Username"
+      TargetPassword:
+        default: "Target Password"
+      MigrationType:
+        default: "Migration Type"
+      EnableAutomation:
+        default: "Enable Automation"
+      CreateDMSRoles:
+        default: "Create DMS Roles"
+      NotificationEmail:
+        default: "Notification Email"
+
+Parameters:
+  # ===========================================
+  # VPC INFORMATION
+  # ===========================================
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where DMS replication instance will be created
+  
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of subnet IDs for DMS replication subnet group. Must select 2 or more subnets in different Availability Zones.
+
+  DMSInstanceClass:
+    Type: String
+    Default: dms.c6i.large
+    AllowedValues: [dms.c5.xlarge, dms.c6i.large, dms.c6i.xlarge, dms.c6i.2xlarge, dms.c6i.4xlarge, dms.c6i.8xlarge, dms.c6i.12xlarge, dms.c6i.16xlarge, dms.c6i.24xlarge]
+    Description: DMS replication instance class
+
+  # ===========================================
+  # SOURCE DATABASE (Aurora PostgreSQL)
+  # ===========================================
+  SourceEndpointHost:
+    Type: String
+    Description: Aurora PostgreSQL endpoint hostname
+  
+  SourceEndpointPort:
+    Type: Number
+    Default: 5432
+    Description: Aurora PostgreSQL port
+  
+  SourceDatabaseName:
+    Type: String
+    Description: Source database name
+  
+  SourceUsername:
+    Type: String
+    Description: Source database username
+  
+  SourcePassword:
+    Type: String
+    NoEcho: true
+    Description: Source database password
+
+  # ===========================================
+  # TARGET DATABASE (PlanetScale PostgreSQL)
+  # ===========================================
+  TargetEndpointHost:
+    Type: String
+    Description: PlanetScale PostgreSQL endpoint hostname
+  
+  TargetEndpointPort:
+    Type: Number
+    Default: 5432
+    Description: PlanetScale PostgreSQL port
+  
+  TargetDatabaseName:
+    Type: String
+    Description: Target database name
+  
+  TargetUsername:
+    Type: String
+    Description: Target database username
+  
+  TargetPassword:
+    Type: String
+    NoEcho: true
+    Description: Target database password
+
+  # ===========================================
+  # ADDITIONAL FEATURES
+  # ===========================================
+  MigrationType:
+    Type: String
+    Default: full-load-and-cdc
+    AllowedValues: [full-load, cdc, full-load-and-cdc]
+    Description: Migration type
+    
+  EnableAutomation:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create automated migration workflow using Step Functions
+    
+  CreateDMSRoles:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create new DMS service roles (set to false if dms-vpc-role and dms-cloudwatch-logs-role already exist)
+    
+  NotificationEmail:
+    Type: String
+    Description: Email address for migration workflow notifications (success/failure)
+    AllowedPattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
+    ConstraintDescription: Must be a valid email address
+
+Resources:
+  # SNS Topic for Migration Notifications
+  MigrationNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-migration-notifications'
+      DisplayName: DMS Migration Workflow Notifications
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-migration-notifications'
+        - Key: Purpose
+          Value: DMS Migration Workflow Notifications
+
+  # SNS Subscription for Email Notifications
+  MigrationNotificationsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref MigrationNotificationsTopic
+      Endpoint: !Ref NotificationEmail
+
+  # S3 Bucket for Pre-Migration Assessment Reports
+  PreMigrationAssessmentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-dms-assessment-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldReports
+            Status: Enabled
+            ExpirationInDays: 90
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-premigration-assessment-bucket'
+        - Key: Purpose
+          Value: DMS Pre-Migration Assessment Reports
+
+  # IAM Role for DMS
+  DMSVPCRole:
+    Type: AWS::IAM::Role
+    Condition: CreateDMSRolesCondition
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: dms.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonDMSVPCManagementRole
+      RoleName: dms-vpc-role
+
+  DMSCloudWatchRole:
+    Type: AWS::IAM::Role
+    Condition: CreateDMSRolesCondition
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: dms.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonDMSCloudWatchLogsRole
+      RoleName: dms-cloudwatch-logs-role
+
+  # Dedicated IAM Role for DMS Assessment Runs
+  DMSAssessmentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-dms-assessment-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: dms.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DMSAssessmentS3Policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObjectTagging
+                Resource: !Sub '${PreMigrationAssessmentBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !GetAtt PreMigrationAssessmentBucket.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-dms-assessment-role'
+        - Key: Purpose
+          Value: DMS Pre-Migration Assessment S3 Access
+
+  # Security Group for DMS Replication Instance
+  DMSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for DMS replication instance
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: DMS-ReplicationInstance-SG
+
+  # DMS Subnet Group
+  DMSSubnetGroup:
+    Type: AWS::DMS::ReplicationSubnetGroup
+    Properties:
+      ReplicationSubnetGroupDescription: Subnet group for DMS replication instance
+      ReplicationSubnetGroupIdentifier: dms-subnet-group
+      SubnetIds: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          Value: DMS-SubnetGroup
+
+  # DMS Replication Instance
+  DMSReplicationInstance:
+    Type: AWS::DMS::ReplicationInstance
+    Properties:
+      ReplicationInstanceIdentifier: aurora-to-planetscale-postgres
+      ReplicationInstanceClass: !Ref DMSInstanceClass
+      AllocatedStorage: 50
+      AutoMinorVersionUpgrade: true
+      EngineVersion: 3.6.1
+      MultiAZ: false
+      PubliclyAccessible: true
+      ReplicationSubnetGroupIdentifier: !Ref DMSSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DMSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: Aurora-to-PlanetScale-DMS
+
+  # Source Endpoint (Aurora PostgreSQL)
+  SourceEndpoint:
+    Type: AWS::DMS::Endpoint
+    Properties:
+      EndpointIdentifier: aurora-postgres-source
+      EndpointType: source
+      EngineName: postgres
+      Username: !Ref SourceUsername
+      Password: !Ref SourcePassword
+      ServerName: !Ref SourceEndpointHost
+      Port: !Ref SourceEndpointPort
+      DatabaseName: !Ref SourceDatabaseName
+      SslMode: require
+      ExtraConnectionAttributes: 'heartbeatEnable=true;heartbeatFrequency=1'
+      Tags:
+        - Key: Name
+          Value: Aurora-PostgreSQL-Source
+
+  # Target Endpoint (PlanetScale for Postgres)
+  TargetEndpoint:
+    Type: AWS::DMS::Endpoint
+    Properties:
+      EndpointIdentifier: planetscale-postgres-target
+      EndpointType: target
+      EngineName: postgres
+      Username: !Ref TargetUsername
+      Password: !Ref TargetPassword
+      ServerName: !Ref TargetEndpointHost
+      Port: !Ref TargetEndpointPort
+      DatabaseName: !Ref TargetDatabaseName
+      SslMode: require
+      ExtraConnectionAttributes: 'heartbeatEnable=true'
+      Tags:
+        - Key: Name
+          Value: PlanetScale-PostgreSQL-Target
+
+  # DMS Replication Task
+  ReplicationTask:
+    Type: AWS::DMS::ReplicationTask
+    Properties:
+      ReplicationTaskIdentifier: aurora-to-planetscale-migration
+      MigrationType: !Ref MigrationType
+      ReplicationInstanceArn: !Ref DMSReplicationInstance
+      SourceEndpointArn: !Ref SourceEndpoint
+      TargetEndpointArn: !Ref TargetEndpoint
+      TableMappings: |
+        {
+          "rules": [
+            {
+              "rule-type": "selection",
+              "rule-id": "1",
+              "rule-name": "include-all-tables",
+              "object-locator": {
+                "schema-name": "public",
+                "table-name": "%"
+              },
+              "rule-action": "include"
+            }
+          ]
+        }
+      ReplicationTaskSettings: |
+        {
+          "TargetMetadata": {
+            "TargetSchema": "",
+            "SupportLobs": true,
+            "FullLobMode": true,
+            "LobChunkSize": 64,
+            "LimitedSizeLobMode": false,
+            "LobMaxSize": 32,
+            "InlineLobMaxSize": 32,
+            "LoadMaxFileSize": 0,
+            "ParallelLoadThreads": 0,
+            "ParallelLoadBufferSize": 0,
+            "BatchApplyEnabled": false,
+            "TaskRecoveryTableEnabled": false,
+            "ParallelApplyThreads": 0,
+            "ParallelApplyBufferSize": 0,
+            "ParallelApplyQueuesPerThread": 0,
+            "ParallelLoadQueuesPerThread": 0
+          },
+          "FullLoadSettings": {
+            "TargetTablePrepMode": "DROP_AND_CREATE",
+            "CreatePkAfterFullLoad": false,
+            "StopTaskCachedChangesApplied": false,
+            "StopTaskCachedChangesNotApplied": false,
+            "MaxFullLoadSubTasks": 16,
+            "TransactionConsistencyTimeout": 600,
+            "CommitRate": 1000,
+            "FullLoadIgnoreConflicts": true
+          },
+          "Logging": {
+            "EnableLogging": true,
+            "EnableLogContext": false,
+            "LogComponents": [
+              {
+                "Id": "SOURCE_UNLOAD",
+                "Severity": "LOGGER_SEVERITY_DEFAULT"
+              },
+              {
+                "Id": "SOURCE_CAPTURE",
+                "Severity": "LOGGER_SEVERITY_DEFAULT"
+              },
+              {
+                "Id": "TARGET_LOAD",
+                "Severity": "LOGGER_SEVERITY_DEFAULT"
+              },
+              {
+                "Id": "TARGET_APPLY",
+                "Severity": "LOGGER_SEVERITY_DEFAULT"
+              },
+              {
+                "Id": "TASK_MANAGER",
+                "Severity": "LOGGER_SEVERITY_DEFAULT"
+              }
+            ]
+          },
+          "ControlTablesSettings": {
+            "historyTimeslotInMinutes": 5,
+            "ControlSchema": "",
+            "HistoryTimeslotInMinutes": 5,
+            "HistoryTableEnabled": false,
+            "SuspendedTablesTableEnabled": false,
+            "StatusTableEnabled": false,
+            "CommitPositionTableEnabled": false,
+            "FullLoadExceptionTableEnabled": false
+          },
+          "StreamBufferSettings": {
+            "StreamBufferCount": 3,
+            "CtrlStreamBufferSizeInMB": 5,
+            "StreamBufferSizeInMB": 8
+          },
+          "ErrorBehavior": {
+            "FailOnNoTablesCaptured": true,
+            "ApplyErrorUpdatePolicy": "LOG_ERROR",
+            "FailOnTransactionConsistencyBreached": false,
+            "RecoverableErrorThrottlingMax": 1800,
+            "DataErrorEscalationPolicy": "SUSPEND_TABLE",
+            "ApplyErrorEscalationCount": 0,
+            "RecoverableErrorStopRetryAfterThrottlingMax": true,
+            "RecoverableErrorThrottling": true,
+            "ApplyErrorFailOnTruncationDdl": false,
+            "DataMaskingErrorPolicy": "STOP_TASK",
+            "DataTruncationErrorPolicy": "LOG_ERROR",
+            "ApplyErrorInsertPolicy": "LOG_ERROR",
+            "EventErrorPolicy": "IGNORE",
+            "ApplyErrorEscalationPolicy": "LOG_ERROR",
+            "RecoverableErrorCount": -1,
+            "DataErrorEscalationCount": 0,
+            "TableErrorEscalationPolicy": "STOP_TASK",
+            "RecoverableErrorInterval": 5,
+            "ApplyErrorDeletePolicy": "IGNORE_RECORD",
+            "TableErrorEscalationCount": 0,
+            "FullLoadIgnoreConflicts": true,
+            "DataErrorPolicy": "LOG_ERROR",
+            "TableErrorPolicy": "SUSPEND_TABLE"
+          },
+          "TTSettings": {
+            "TTS3Settings": null,
+            "TTRecordSettings": null,
+            "EnableTT": false
+          },
+          "ValidationSettings": {
+            "EnableValidation": false,
+            "ValidationMode": "ROW_LEVEL",
+            "ThreadCount": 5,
+            "FailureMaxCount": 10000,
+            "TableFailureMaxCount": 1000,
+            "HandleCollationDiff": false,
+            "ValidationOnly": false,
+            "RecordFailureDelayLimitInMinutes": 0,
+            "SkipLobColumns": false,
+            "ValidationPartialLobSize": 0,
+            "ValidationQueryCdcDelaySeconds": 0,
+            "PartitionSize": 10000
+          },
+          "PostProcessingRules": null,
+          "CharacterSetSettings": null,
+          "LoopbackPreventionSettings": null,
+          "BeforeImageSettings": null,
+          "FailTaskWhenCleanTaskResourceFailed": false,
+          "ChangeProcessingTuning": {
+            "StatementCacheSize": 50,
+            "CommitTimeout": 1,
+            "RecoveryTimeout": -1,
+            "BatchApplyPreserveTransaction": true,
+            "BatchApplyTimeoutMin": 1,
+            "BatchSplitSize": 0,
+            "BatchApplyTimeoutMax": 30,
+            "MinTransactionSize": 1000,
+            "MemoryKeepTime": 60,
+            "BatchApplyMemoryLimit": 500,
+            "MemoryLimitTotal": 1024
+          },
+          "ChangeProcessingDdlHandlingPolicy": {
+            "HandleSourceTableDropped": true,
+            "HandleSourceTableTruncated": true,
+            "HandleSourceTableAltered": true
+          }
+        }
+      Tags:
+        - Key: Name
+          Value: Aurora-PlanetScale-Migration-Task
+
+  # ===========================================
+  # AUTOMATION RESOURCES (Lambda + Step Functions)
+  # ===========================================
+  
+  # Lambda Function: Fix Source Connection Security Group
+  FixSourceConnectionFunction:
+    Type: AWS::Lambda::Function
+    Condition: EnableAutomationCondition
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-fix-source-connection'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import boto3
+          import os
+          import re
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              logger.info("Starting source connection security group fix")
+              try:
+                  rds = boto3.client('rds')
+                  ec2 = boto3.client('ec2')
+                  
+                  # Get parameters from event
+                  source_endpoint_host = event['sourceEndpointHost']
+                  source_port = event['sourcePort']
+                  dms_security_group_id = os.environ['DMS_SECURITY_GROUP_ID']
+                  
+                  logger.info(f"Source endpoint: {source_endpoint_host}, Port: {source_port}")
+                  
+                  # Find the database by endpoint hostname
+                  db_identifier = None
+                  db_security_groups = []
+                  
+                  # Try to find RDS cluster first
+                  try:
+                      clusters = rds.describe_db_clusters()
+                      for cluster in clusters['DBClusters']:
+                          if cluster['Endpoint'] == source_endpoint_host:
+                              db_identifier = cluster['DBClusterIdentifier']
+                              db_security_groups = [sg['VpcSecurityGroupId'] for sg in cluster['VpcSecurityGroups']]
+                              logger.info(f"Found RDS cluster: {db_identifier}")
+                              break
+                  except Exception as e:
+                      logger.warning(f"Error searching clusters: {e}")
+                  
+                  # If not found, try RDS instances
+                  if not db_identifier:
+                      try:
+                          instances = rds.describe_db_instances()
+                          for instance in instances['DBInstances']:
+                              if instance['Endpoint']['Address'] == source_endpoint_host:
+                                  db_identifier = instance['DBInstanceIdentifier']
+                                  db_security_groups = [sg['VpcSecurityGroupId'] for sg in instance['VpcSecurityGroups']]
+                                  logger.info(f"Found RDS instance: {db_identifier}")
+                                  break
+                      except Exception as e:
+                          logger.warning(f"Error searching instances: {e}")
+                  
+                  if not db_identifier:
+                      raise Exception(f"Could not find RDS database with endpoint: {source_endpoint_host}")
+                  
+                  # Add ingress rule to each security group
+                  rules_added = []
+                  for sg_id in db_security_groups:
+                      try:
+                          logger.info(f"Adding ingress rule to security group: {sg_id}")
+                          ec2.authorize_security_group_ingress(
+                              GroupId=sg_id,
+                              IpPermissions=[
+                                  {
+                                      'IpProtocol': 'tcp',
+                                      'FromPort': int(source_port),
+                                      'ToPort': int(source_port),
+                                      'UserIdGroupPairs': [
+                                          {
+                                              'GroupId': dms_security_group_id,
+                                              'Description': f'DMS access for migration - Auto-added by {context.function_name}'
+                                          }
+                                      ]
+                                  }
+                              ]
+                          )
+                          rules_added.append(sg_id)
+                          logger.info(f"Successfully added rule to security group: {sg_id}")
+                      except Exception as e:
+                          if 'InvalidGroup.Duplicate' in str(e):
+                              logger.info(f"Rule already exists in security group: {sg_id}")
+                              rules_added.append(sg_id)
+                          else:
+                              logger.error(f"Failed to add rule to security group {sg_id}: {e}")
+                              raise
+                  
+                  return {
+                      'statusCode': 200,
+                      'databaseIdentifier': db_identifier,
+                      'securityGroupsModified': rules_added,
+                      'message': f'Successfully updated security groups for {db_identifier}'
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Security group fix failed: {str(e)}")
+                  raise Exception(f"Security group fix failed: {str(e)}")
+      Environment:
+        Variables:
+          DMS_SECURITY_GROUP_ID: !Ref DMSSecurityGroup
+
+  # Lambda Function: Start Pre-migration Assessment
+  StartAssessmentFunction:
+    Type: AWS::Lambda::Function
+    Condition: EnableAutomationCondition
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-start-assessment'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import boto3
+          import os
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              logger.info("Starting pre-migration assessment")
+              try:
+                  dms = boto3.client('dms')
+                  
+                  # Get parameters from event
+                  task_arn = event['replicationTaskArn']
+                  bucket_name = os.environ['ASSESSMENT_BUCKET']
+                  
+                  # Individual assessments to run
+                  assessments = [
+                      "postgres-check-dbversion",
+                      "postgres-check-target-privileges", 
+                      "postgres-check-replication-slots-count",
+                      "postgres-check-select-object-privileges",
+                      "postgres-check-wallevel",
+                      "postgres-check-walsenderstimeout",
+                      "postgres-check-maxwalsenders"
+                  ]
+                  
+                  # Start assessment run - try with specific assessments first
+                  try:
+                      response = dms.start_replication_task_assessment_run(
+                          ReplicationTaskArn=task_arn,
+                          ServiceAccessRoleArn=os.environ['SERVICE_ACCESS_ROLE_ARN'],
+                          ResultLocationBucket=bucket_name,
+                          ResultLocationFolder='assessment-reports',
+                          AssessmentRunName=f'assessment-{context.aws_request_id[:8]}',
+                          IncludeOnly=assessments
+                      )
+                  except Exception as e:
+                      logger.warning(f"Failed to start assessment with specific assessments: {e}")
+                      logger.info("Trying to start assessment with all available assessments...")
+                      # Fallback: run all available assessments
+                      response = dms.start_replication_task_assessment_run(
+                          ReplicationTaskArn=task_arn,
+                          ServiceAccessRoleArn=os.environ['SERVICE_ACCESS_ROLE_ARN'],
+                          ResultLocationBucket=bucket_name,
+                          ResultLocationFolder='assessment-reports',
+                          AssessmentRunName=f'assessment-{context.aws_request_id[:8]}'
+                      )
+                  
+                  return {
+                      'statusCode': 200,
+                      'assessmentRunArn': response['ReplicationTaskAssessmentRun']['ReplicationTaskAssessmentRunArn'],
+                      'status': response['ReplicationTaskAssessmentRun']['Status']
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Assessment start failed: {str(e)}")
+                  raise Exception(f"Assessment start failed: {str(e)}")
+      Environment:
+        Variables:
+          ASSESSMENT_BUCKET: !Ref PreMigrationAssessmentBucket
+          SERVICE_ACCESS_ROLE_ARN: !GetAtt DMSAssessmentRole.Arn
+
+  # IAM Role for Lambda Functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: EnableAutomationCondition
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DMSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dms:*
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeInternetGateways
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt DMSAssessmentRole.Arn
+        - PolicyName: RDSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBParameters
+                  - rds:DescribeDBClusterParameters
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBParameterGroups
+                  - rds:DescribeDBClusterParameterGroups
+                  - rds:DescribeDBInstances
+                Resource: '*'
+        - PolicyName: EC2SecurityGroupAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeSecurityGroups
+                  - ec2:AuthorizeSecurityGroupIngress
+                Resource: '*'
+
+  # IAM Role for Step Functions
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: EnableAutomationCondition
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DMSAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dms:TestConnection
+                  - dms:DescribeConnections
+                  - dms:StartReplicationTask
+                  - dms:StopReplicationTask
+                  - dms:DescribeReplicationTasks
+                  - dms:DescribeReplicationInstances
+                  - dms:DescribeEndpoints
+                  - dms:DescribeReplicationTaskAssessmentRuns
+                  - dms:DescribeReplicationTaskIndividualAssessments
+                Resource: '*'
+        - PolicyName: S3AssessmentReportsReadPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub '${PreMigrationAssessmentBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !GetAtt PreMigrationAssessmentBucket.Arn
+        - PolicyName: LambdaInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: 
+                  - !GetAtt StartAssessmentFunction.Arn
+                  - !GetAtt FixSourceConnectionFunction.Arn
+        - PolicyName: SNSPublishPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref MigrationNotificationsTopic
+
+
+
+
+  
+  # Step Functions State Machine
+  MigrationStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Condition: EnableAutomationCondition
+    Properties:
+      StateMachineName: !Sub '${AWS::StackName}-migration-workflow'
+      RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Automated Aurora PostgreSQL to PlanetScale for Postgres Migration Workflow",
+          "StartAt": "ParallelConnectionTests",
+          "States": {
+            "ParallelConnectionTests": {
+              "Type": "Parallel",
+              "Comment": "Test source and target connections in parallel",
+              "Branches": [
+                {
+                  "StartAt": "TestSourceConnection",
+                  "States": {
+                    "TestSourceConnection": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:databasemigration:testConnection",
+                      "Parameters": {
+                        "ReplicationInstanceArn.$": "$.replicationInstanceArn",
+                        "EndpointArn.$": "$.sourceEndpointArn"
+                      },
+                      "ResultPath": "$.sourceTestInitResult",
+                      "Next": "WaitForSourceTest",
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.TaskFailed"],
+                          "IntervalSeconds": 30,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2.0
+                        }
+                      ]
+                    },
+                    "WaitForSourceTest": {
+                      "Type": "Wait",
+                      "Seconds": 15,
+                      "Comment": "Initial wait for source connection test",
+                      "Next": "CheckSourceConnectionStatus"
+                    },
+                    "CheckSourceConnectionStatus": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:databasemigration:describeConnections",
+                      "Parameters": {
+                        "Filters": [
+                          {
+                            "Name": "endpoint-arn",
+                            "Values.$": "States.Array($.sourceEndpointArn)"
+                          },
+                          {
+                            "Name": "replication-instance-arn", 
+                            "Values.$": "States.Array($.replicationInstanceArn)"
+                          }
+                        ]
+                      },
+                      "ResultPath": "$.sourceConnections",
+                      "Next": "EvaluateSourceConnectionStatus",
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.TaskFailed"],
+                          "IntervalSeconds": 15,
+                          "MaxAttempts": 10,
+                          "BackoffRate": 2.0
+                        }
+                      ]
+                    },
+                    "EvaluateSourceConnectionStatus": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.sourceConnections.Connections[0].Status",
+                          "StringEquals": "successful",
+                          "Next": "SourceConnectionSuccessful"
+                        },
+                        {
+                          "Variable": "$.sourceConnections.Connections[0].Status",
+                          "StringEquals": "failed",
+                          "Next": "SourceConnectionFailed"
+                        }
+                      ],
+                      "Default": "WaitForSourceTestRetry"
+                    },
+                    "WaitForSourceTestRetry": {
+                      "Type": "Wait",
+                      "Seconds": 30,
+                      "Comment": "Wait before retrying source connection status check",
+                      "Next": "CheckSourceConnectionStatus"
+                    },
+                    "SourceConnectionSuccessful": {
+                      "Type": "Pass",
+                      "Result": {
+                        "status": "successful",
+                        "message": "Source connection test successful"
+                      },
+                      "ResultPath": "$.sourceTestResult",
+                      "End": true
+                    },
+                    "SourceConnectionFailed": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": "${FixSourceConnectionFunction}",
+                        "Payload": {
+                          "sourceEndpointHost.$": "$.sourceEndpointHost",
+                          "sourcePort.$": "$.sourcePort"
+                        }
+                      },
+                      "ResultPath": "$.securityGroupFixResult",
+                      "Next": "RetrySourceConnectionAfterFix",
+                      "Catch": [
+                        {
+                          "ErrorEquals": ["States.ALL"],
+                          "Next": "SourceConnectionFailedFinal",
+                          "ResultPath": "$.securityGroupFixError"
+                        }
+                      ]
+                    },
+                    "RetrySourceConnectionAfterFix": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:databasemigration:testConnection",
+                      "Parameters": {
+                        "ReplicationInstanceArn.$": "$.replicationInstanceArn",
+                        "EndpointArn.$": "$.sourceEndpointArn"
+                      },
+                      "ResultPath": "$.sourceRetryTestResult",
+                      "Next": "WaitForSourceRetryTest",
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.TaskFailed"],
+                          "IntervalSeconds": 30,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 2.0
+                        }
+                      ]
+                    },
+                    "WaitForSourceRetryTest": {
+                      "Type": "Wait",
+                      "Seconds": 30,
+                      "Comment": "Wait for source connection retry test",
+                      "Next": "CheckSourceRetryConnectionStatus"
+                    },
+                    "CheckSourceRetryConnectionStatus": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:databasemigration:describeConnections",
+                      "Parameters": {
+                        "Filters": [
+                          {
+                            "Name": "endpoint-arn",
+                            "Values.$": "States.Array($.sourceEndpointArn)"
+                          },
+                          {
+                            "Name": "replication-instance-arn", 
+                            "Values.$": "States.Array($.replicationInstanceArn)"
+                          }
+                        ]
+                      },
+                      "ResultPath": "$.sourceRetryConnections",
+                      "Next": "EvaluateSourceRetryConnectionStatus",
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.TaskFailed"],
+                          "IntervalSeconds": 15,
+                          "MaxAttempts": 5,
+                          "BackoffRate": 2.0
+                        }
+                      ]
+                    },
+                    "EvaluateSourceRetryConnectionStatus": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.sourceRetryConnections.Connections[0].Status",
+                          "StringEquals": "successful",
+                          "Next": "SourceConnectionSuccessful"
+                        },
+                        {
+                          "Variable": "$.sourceRetryConnections.Connections[0].Status",
+                          "StringEquals": "failed",
+                          "Next": "SourceConnectionFailedFinal"
+                        }
+                      ],
+                      "Default": "WaitForSourceRetryTestStatus"
+                    },
+                    "WaitForSourceRetryTestStatus": {
+                      "Type": "Wait",
+                      "Seconds": 30,
+                      "Comment": "Wait before retrying source connection status check after fix",
+                      "Next": "CheckSourceRetryConnectionStatus"
+                    },
+                    "SourceConnectionFailedFinal": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::sns:publish",
+                      "Parameters": {
+                        "TopicArn": "${MigrationNotificationsTopic}",
+                        "Subject": "❌ DMS Source Connection Failed",
+                        "Message": "DMS Source Connection Failed\n\nStack: ${AWS::StackName}\nRegion: ${AWS::Region}\n\nThe source connection test failed even after attempting to fix security group issues.\n\nTroubleshooting Steps:\n1. Check source database connectivity\n2. Verify security group rules\n3. Ensure database credentials are correct\n4. Check VPC configuration\n\nConsole URLs:\n- DMS Tasks: https://${AWS::Region}.console.aws.amazon.com/dms/v2/home?region=${AWS::Region}#tasks\n- Step Functions: https://${AWS::Region}.console.aws.amazon.com/states/home?region=${AWS::Region}#/statemachines\n\nPlease check the Step Functions execution details for specific error information."
+                      },
+                      "Next": "SourceConnectionWorkflowFailed",
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.TaskFailed"],
+                          "IntervalSeconds": 10,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2.0
+                        }
+                      ],
+                      "Catch": [
+                        {
+                          "ErrorEquals": ["States.ALL"],
+                          "Next": "SourceConnectionWorkflowFailed",
+                          "Comment": "Continue even if notification fails"
+                        }
+                      ]
+                    },
+                    "SourceConnectionWorkflowFailed": {
+                      "Type": "Fail",
+                      "Comment": "Source connection test failed even after security group fix attempt",
+                      "Cause": "Source connection test failed. Check database connectivity and security groups."
+                    }
+                  }
+                },
+                {
+                  "StartAt": "TestTargetConnection",
+                  "States": {
+                    "TestTargetConnection": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:databasemigration:testConnection",
+                      "Parameters": {
+                        "ReplicationInstanceArn.$": "$.replicationInstanceArn",
+                        "EndpointArn.$": "$.targetEndpointArn"
+                      },
+                      "ResultPath": "$.targetTestInitResult",
+                      "Next": "WaitForTargetTest",
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.TaskFailed"],
+                          "IntervalSeconds": 30,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2.0
+                        }
+                      ]
+                    },
+                    "WaitForTargetTest": {
+                      "Type": "Wait",
+                      "Seconds": 15,
+                      "Comment": "Initial wait for target connection test",
+                      "Next": "CheckTargetConnectionStatus"
+                    },
+                    "CheckTargetConnectionStatus": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::aws-sdk:databasemigration:describeConnections",
+                      "Parameters": {
+                        "Filters": [
+                          {
+                            "Name": "endpoint-arn",
+                            "Values.$": "States.Array($.targetEndpointArn)"
+                          },
+                          {
+                            "Name": "replication-instance-arn",
+                            "Values.$": "States.Array($.replicationInstanceArn)"
+                          }
+                        ]
+                      },
+                      "ResultPath": "$.targetConnections",
+                      "Next": "EvaluateTargetConnectionStatus",
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.TaskFailed"],
+                          "IntervalSeconds": 15,
+                          "MaxAttempts": 10,
+                          "BackoffRate": 2.0
+                        }
+                      ]
+                    },
+                    "EvaluateTargetConnectionStatus": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.targetConnections.Connections[0].Status",
+                          "StringEquals": "successful",
+                          "Next": "TargetConnectionSuccessful"
+                        },
+                        {
+                          "Variable": "$.targetConnections.Connections[0].Status",
+                          "StringEquals": "failed",
+                          "Next": "TargetConnectionFailed"
+                        }
+                      ],
+                      "Default": "WaitForTargetTestRetry"
+                    },
+                    "WaitForTargetTestRetry": {
+                      "Type": "Wait",
+                      "Seconds": 30,
+                      "Comment": "Wait before retrying target connection status check",
+                      "Next": "CheckTargetConnectionStatus"
+                    },
+                    "TargetConnectionSuccessful": {
+                      "Type": "Pass",
+                      "Result": {
+                        "status": "successful",
+                        "message": "Target connection test successful"
+                      },
+                      "ResultPath": "$.targetTestResult",
+                      "End": true
+                    },
+                    "TargetConnectionFailed": {
+                      "Type": "Fail",
+                      "Cause": "Target connection test failed"
+                    }
+                  }
+                }
+              ],
+              "ResultPath": "$.connectionTests",
+              "Next": "StartAssessmentRun",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "MigrationFailed",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "StartAssessmentRun": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StartAssessmentFunction}",
+                "Payload": {
+                  "replicationTaskArn.$": "$.replicationTaskArn"
+                }
+              },
+              "ResultPath": "$.assessmentRun",
+              "Next": "MonitorAssessmentRun",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "MigrationFailed",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "MonitorAssessmentRun": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:databasemigration:describeReplicationTaskAssessmentRuns",
+              "Parameters": {
+                "Filters": [
+                  {
+                    "Name": "replication-task-assessment-run-arn",
+                    "Values.$": "States.Array($.assessmentRun.Payload.assessmentRunArn)"
+                  }
+                ]
+              },
+              "ResultPath": "$.assessmentStatus",
+              "Next": "CheckAssessmentRunStatus"
+            },
+            "CheckAssessmentRunStatus": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.assessmentStatus.ReplicationTaskAssessmentRuns[0].Status",
+                  "StringEquals": "passed",
+                  "Next": "AssessmentPassed"
+                },
+                {
+                  "Variable": "$.assessmentStatus.ReplicationTaskAssessmentRuns[0].Status",
+                  "StringEquals": "failed",
+                  "Next": "AssessmentFailed"
+                },
+                {
+                  "Variable": "$.assessmentStatus.ReplicationTaskAssessmentRuns[0].Status",
+                  "StringEquals": "warning",
+                  "Next": "AssessmentPassed"
+                }
+              ],
+              "Default": "WaitForAssessmentRun"
+            },
+            "WaitForAssessmentRun": {
+              "Type": "Wait",
+              "Seconds": 60,
+              "Comment": "Wait 1 minute before checking assessment run status again",
+              "Next": "MonitorAssessmentRun"
+            },
+            "AssessmentPassed": {
+              "Type": "Pass",
+              "Comment": "Pre-migration assessment passed or completed with warnings",
+              "Result": {
+                "message": "Assessment completed successfully. Proceeding with migration.",
+                "status": "assessment-passed"
+              },
+              "ResultPath": "$.assessmentResult",
+              "Next": "StartReplicationTask"
+            },
+            "AssessmentFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${MigrationNotificationsTopic}",
+                "Subject": "⚠️ DMS Pre-Migration Assessment Failed",
+                "Message": "DMS Pre-Migration Assessment Failed\n\nStack: ${AWS::StackName}\nRegion: ${AWS::Region}\n\nNext Steps:\n1. Review detailed assessment report in S3\n2. Fix identified issues\n3. Re-run the Step Functions workflow\n\nConsole URLs:\n- S3 Assessment Reports: https://s3.console.aws.amazon.com/s3/buckets/${PreMigrationAssessmentBucket}\n- Step Functions: https://${AWS::Region}.console.aws.amazon.com/states/home?region=${AWS::Region}#/statemachines\n\nPlease check the assessment reports in S3 for detailed failure information."
+              },
+              "Next": "AssessmentWorkflowFailed",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "AssessmentWorkflowFailed",
+                  "Comment": "Continue even if notification fails"
+                }
+              ]
+            },
+            "AssessmentWorkflowFailed": {
+              "Type": "Fail",
+              "Comment": "Pre-migration assessment failed",
+              "Cause": "Assessment run failed. Review S3 reports and fix issues before proceeding."
+            },
+            "StartReplicationTask": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:databasemigration:startReplicationTask",
+              "Parameters": {
+                "ReplicationTaskArn.$": "$.replicationTaskArn",
+                "StartReplicationTaskType": "start-replication"
+              },
+              "ResultPath": "$.startTaskResult",
+              "Next": "MonitorMigration",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "MigrationFailed",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "MonitorMigration": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:databasemigration:describeReplicationTasks",
+              "Parameters": {
+                "Filters": [
+                  {
+                    "Name": "replication-task-arn",
+                    "Values.$": "States.Array($.replicationTaskArn)"
+                  }
+                ]
+              },
+              "ResultPath": "$.migrationStatus",
+              "Next": "CheckMigrationStatus"
+            },
+            "CheckMigrationStatus": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.migrationStatus.ReplicationTasks[0].Status",
+                  "StringEquals": "failed",
+                  "Next": "MigrationFailed"
+                },
+                {
+                  "And": [
+                    {
+                      "Variable": "$.migrationStatus.ReplicationTasks[0].Status",
+                      "StringEquals": "running"
+                    },
+                    {
+                      "Variable": "$.migrationStatus.ReplicationTasks[0].ReplicationTaskStats.FullLoadProgressPercent",
+                      "NumericEquals": 100
+                    }
+                  ],
+                  "Next": "FullLoadCompleted"
+                },
+                {
+                  "Variable": "$.migrationStatus.ReplicationTasks[0].Status",
+                  "StringEquals": "running",
+                  "Next": "WaitForMigration"
+                }
+              ],
+              "Default": "WaitForMigration"
+            },
+            "WaitForMigration": {
+              "Type": "Wait",
+              "Seconds": 300,
+              "Comment": "Wait 5 minutes before checking migration status again",
+              "Next": "MonitorMigration"
+            },
+            "FullLoadCompleted": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${MigrationNotificationsTopic}",
+                "Subject": "✅ DMS Aurora to PlanetScale Full Load Completed - CDC Active",
+                "Message": "DMS Aurora PostgreSQL to PlanetScale for Postgres Full Load Completed Successfully\n\nStack: ${AWS::StackName}\nRegion: ${AWS::Region}\n\nMigration Details:\n- Source: Aurora PostgreSQL\n- Target: PlanetScale for Postgres\n- Migration Type: ${MigrationType}\n- Status: Full load completed (100%), CDC replication is now active\n\nNext Steps:\n1. Verify data integrity in PlanetScale for Postgres\n2. Test application connectivity\n3. Plan application cutover when ready\n4. Monitor CDC lag for ongoing changes\n\nConsole URLs:\n- DMS Tasks: https://${AWS::Region}.console.aws.amazon.com/dms/v2/home?region=${AWS::Region}#tasks\n- Step Functions: https://${AWS::Region}.console.aws.amazon.com/states/home?region=${AWS::Region}#/statemachines\n\nFull load migration completed successfully! CDC replication is ongoing."
+              },
+              "Next": "MigrationCompleted",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "MigrationCompleted",
+                  "Comment": "Continue even if notification fails"
+                }
+              ]
+            },
+            "MigrationCompleted": {
+              "Type": "Succeed",
+              "Comment": "Aurora to PlanetScale full load completed successfully, CDC replication is active"
+            },
+            "MigrationFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${MigrationNotificationsTopic}",
+                "Subject": "❌ DMS Migration Failed",
+                "Message": "DMS Migration Workflow Failed\n\nStack: ${AWS::StackName}\nRegion: ${AWS::Region}\n\nTroubleshooting Steps:\n1. Check DMS task logs in CloudWatch\n2. Review assessment reports in S3 bucket\n3. Verify source/target connectivity\n4. Check IAM permissions\n\nConsole URLs:\n- DMS Tasks: https://${AWS::Region}.console.aws.amazon.com/dms/v2/home?region=${AWS::Region}#tasks\n- Step Functions: https://${AWS::Region}.console.aws.amazon.com/states/home?region=${AWS::Region}#/statemachines\n- S3 Assessment Reports: https://s3.console.aws.amazon.com/s3/buckets/${PreMigrationAssessmentBucket}\n\nPlease check the Step Functions execution details for specific error information."
+              },
+              "Next": "MigrationWorkflowFailed",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "MigrationWorkflowFailed",
+                  "Comment": "Continue even if notification fails"
+                }
+              ]
+            },
+            "MigrationWorkflowFailed": {
+              "Type": "Fail",
+              "Comment": "Migration workflow failed"
+            }
+          }
+        }
+
+# Conditions
+Conditions:
+  EnableAutomationCondition: !Equals [!Ref EnableAutomation, 'true']
+  CreateDMSRolesCondition: !Equals [!Ref CreateDMSRoles, 'true']
+
+Outputs:
+  ReplicationInstanceArn:
+    Description: ARN of the DMS replication instance
+    Value: !Ref DMSReplicationInstance
+    
+  SourceEndpointArn:
+    Description: ARN of the source endpoint
+    Value: !Ref SourceEndpoint
+    
+  TargetEndpointArn:
+    Description: ARN of the target endpoint
+    Value: !Ref TargetEndpoint
+    
+  PreMigrationAssessmentBucket:
+    Description: S3 bucket for pre-migration assessment reports
+    Value: !Ref PreMigrationAssessmentBucket
+    
+  NotificationTopicArn:
+    Description: SNS topic ARN for migration notifications
+    Value: !Ref MigrationNotificationsTopic
+    
+  NotificationEmail:
+    Description: Email address configured for notifications
+    Value: !Ref NotificationEmail
+    
+  DMSAssessmentRoleArn:
+    Description: ARN of the DMS assessment role for S3 access
+    Value: !GetAtt DMSAssessmentRole.Arn
+    
+  ReplicationTaskArn:
+    Description: ARN of the replication task
+    Value: !Ref ReplicationTask
+    
+  DMSConsoleURL:
+    Description: URL to DMS console for monitoring
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/dms/v2/home?region=${AWS::Region}#tasks'
+    
+  # Automation Outputs
+  MigrationStateMachineArn:
+    Condition: EnableAutomationCondition
+    Description: ARN of the Step Functions state machine for automated migration
+    Value: !Ref MigrationStateMachine
+    
+  StepFunctionsConsoleURL:
+    Condition: EnableAutomationCondition
+    Description: URL to Step Functions console for monitoring workflow execution
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/states/home?region=${AWS::Region}#/statemachines/view/${MigrationStateMachine}'
+    
+  AutomationStatus:
+    Description: Status of automation features
+    Value: !If [EnableAutomationCondition, 'Enabled', 'Disabled']
+    
+  DMSRolesStatus:
+    Description: Status of DMS service roles creation
+    Value: !If [CreateDMSRolesCondition, 'Created new roles', 'Using existing roles']
+    
+  DMSRolesNote:
+    Description: Important note about DMS roles
+    Value: !If 
+      - CreateDMSRolesCondition
+      - 'New DMS roles created: dms-vpc-role and dms-cloudwatch-logs-role'
+      - 'Using existing roles: dms-vpc-role and dms-cloudwatch-logs-role must exist in your account'
+      
+  # Step Functions Execution Payload (without sensitive data)
+  StepFunctionsPayloadTemplate:
+    Condition: EnableAutomationCondition
+    Description: JSON payload template for Step Functions workflow
+    Value: !Sub |
+      {
+        "replicationInstanceArn": "${DMSReplicationInstance}",
+        "sourceEndpointArn": "${SourceEndpoint}",
+        "targetEndpointArn": "${TargetEndpoint}",
+        "replicationTaskArn": "${ReplicationTask}",
+        "sourceEndpointHost": "${SourceEndpointHost}",
+        "sourcePort": "${SourceEndpointPort}"
+      }
