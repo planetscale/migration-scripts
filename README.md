@@ -6,6 +6,10 @@ Use these scripts to migrate a Postgres database to PlanetScale for Postgres or 
 
 This direct migration uses logical replication and, optionally, a proxy which can manage connections and sequences for a zero-downtime migration.
 
+## [Heroku Postgres to PlanetScale for Postgres](./heroku-planetscale)
+
+Heroku notably does not support logical replication. This strategy uses Bucardo to manage trigger-based asynchronous replication from Heroku into PlanetScale for Postgres.
+
 ## [Postgres to PlanetScale for Postgres or Vitess/MySQL via AWS DMS](./postgres-planetscale)
 
 This has some speed limitations and is only recommended for databases 100GB or less.
