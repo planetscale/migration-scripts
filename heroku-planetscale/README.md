@@ -3,7 +3,7 @@ Heroku Postgres to PlanetScale for Postgres via Bucardo asynchronous replication
 
 Heroku notably does not support logical replication, which has left many of its customers on outdated Postgres and without a convenient migration path to another provider. PlanetScale have tested a wide variety of plausible strategies and [Bucardo](https://bucardo.org/Bucardo/)'s trigger-based asynchronous replication has proven to be the most reliable option with the least downtime.
 
-There may be a variation of this strategy that uses the [`ff-seq.sh`](../postgres-direct/ff-seq.sh) tool from our logical replication strategy that can provide a true zero-downtime exit strategy from Heroku. Get in touch if this is a requirement for you.
+There may be a variation of this strategy that uses the [`ff-seq.sh`](../postgres-direct/ff-seq.sh) tool from our logical replication strategy that can provide a true zero-downtime exit strategy from Heroku. [Get in touch](mailto:support@planetscale.com) if this is a requirement for you.
 
 Setup
 -----
