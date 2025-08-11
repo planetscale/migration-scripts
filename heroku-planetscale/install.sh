@@ -12,14 +12,14 @@ sudo apt-get -y install "libdbd-pg-perl" "libdbix-safe-perl" "libpod-parser-perl
 
 if ! which "bucardo"
 then
-    if [ ! -f "$TMP/Bucardo-$BUCARDO_VERSION.tar.gz" ]
-    then curl -L -o "$TMP/Bucardo-$BUCARDO_VERSION.tar.gz" -s "https://bucardo.org/downloads/Bucardo-$BUCARDO_VERSION.tar.gz"
+    if [ ! -f "$TMP/bucardo-$BUCARDO_VERSION.tar.gz" ]
+    then curl -L -o "$TMP/bucardo-$BUCARDO_VERSION.tar.gz" "https://github.com/bucardo/bucardo/archive/$BUCARDO_VERSION.tar.gz"
     fi
-    if [ ! -d "$TMP/Bucardo-$BUCARDO_VERSION" ]
-    then tar -C "$TMP" -f "$TMP/Bucardo-$BUCARDO_VERSION.tar.gz" -x
+    if [ ! -d "$TMP/bucardo-$BUCARDO_VERSION" ]
+    then tar -C "$TMP" -f "$TMP/bucardo-$BUCARDO_VERSION.tar.gz" -x
     fi
     (
-        cd "$TMP/Bucardo-$BUCARDO_VERSION"
+        cd "$TMP/bucardo-$BUCARDO_VERSION"
         perl "Makefile.PL"
         make
         sudo make install
