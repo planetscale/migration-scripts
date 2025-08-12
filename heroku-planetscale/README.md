@@ -97,13 +97,13 @@ tail -F "/var/log/bucardo/log.bucardo"
 Switch traffic
 --------------
 
-Because Bucardo is replicating both table and sequence data, it's critical to stop write traffic at the source completely. Most likely, this can best be accomplished at the application level. However, it is possible to enforce at the database level, too:
+Because Bucardo is replicating both table and sequence data, it's critical to stop write traffic at the source completely. `heroku maintenance:on` can stop all traffic but if you want to continue to allow read traffic, you can either arrange for that at the application level or enforce it at the database level thus:
 
 ```sh
 psql "$HEROKU" -c "REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM $(echo "$HEROKU" | cut -d "/" -f 3 | cut -d ":" -f 1);"
 ```
 
-Once writes have stopped reaching Heroku, it's safe to begin writes to PlanetScale via an application deploy or reconfiguration.
+Once writes have stopped reaching Heroku and replicated to PlanetScale, it's safe to begin writes to PlanetScale via an application deploy or reconfiguration.
 
 If you issued the `REVOKE` statement above and need to abort before switching traffic and return to service on Heroku, revert as follows:
 
