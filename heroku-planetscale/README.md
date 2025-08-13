@@ -5,22 +5,26 @@ Heroku notably does not support logical replication, which has left many of its 
 
 There may be a variation of this strategy that uses the [`ff-seq.sh`](../postgres-direct/ff-seq.sh) tool from our logical replication strategy that can provide a true zero-downtime exit strategy from Heroku. [Get in touch](mailto:support@planetscale.com) if this is a requirement for you.
 
-Setup, bulk copy, and replication
----------------------------------
+Setup, copy, and replication
+----------------------------
 
-1. Launch an EC2 instance where you'll run Bucardo. It must run Linux and have network connectivity to both Heroku and PlanetScale.
+1. Create a PlanetScale for Postgres database.
+    * Choose a size with similar CPU and RAM as what you run in Heroku. Don't stress as resizing in PlanetScale is an online operation.
+    * Ensure you have at least twice the storage space as Heroku reports using. (Postgres disk usage can vary wildly and Bucardo is not very space-efficient. Automatic vacuuming will return disk usage to baseline over time.) Either choose a PlanetScale Metal size with enough space or visit the Storage tab of the Cluster Configuration page to proactively adjust how much space is available on your network-attached storage volumes.
 
-2. Install and configure Bucardo there:
+2. Launch an EC2 instance where you'll run Bucardo. It must run Linux and have network connectivity to both Heroku and PlanetScale.
+
+3. Install and configure Bucardo there:
 
     ```sh
     sh install-bucardo.sh
     ```
 
-3. Export two environment variables there:
+4. Export two environment variables there:
     * `HEROKU`: URL-formatted Heroku Postgres connection information for the source database.
     * `PLANETSCALE`: Space-delimited PlanetScale for Postgres connection information for the `postgres` role (as shown on the Connect page for your database) for the target database.
 
-4. Configure and start Bucardo:
+5. Configure and start Bucardo:
 
     ```sh
     sh mk-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
