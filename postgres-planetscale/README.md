@@ -1,6 +1,6 @@
-# Postgres to PlanetScale
+# Postgres to PlanetScale for Vitess
 
-This script leverages [AWS DMS](https://aws.amazon.com/dms/) to migrate an existing Postgres source database to PlanetScale.
+This script leverages [AWS DMS](https://aws.amazon.com/dms/) to migrate an existing Postgres source database to PlanetScale for Vitess.
 
 When importing into a PlanetScale Vitess database, this script's performance is limited and so it is only recommended for databases 100GB or less.
 

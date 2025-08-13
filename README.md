@@ -10,11 +10,11 @@ This direct migration uses logical replication and, optionally, a proxy which ca
 
 Heroku notably does not support logical replication. This strategy uses Bucardo to manage trigger-based asynchronous replication from Heroku into PlanetScale for Postgres.
 
-## [Postgres to PlanetScale for Postgres or Vitess/MySQL via AWS DMS](./postgres-planetscale)
+## [Postgres to PlanetScale for Postgres or Vitess via AWS DMS](./postgres-planetscale)
 
 This has some speed limitations and is only recommended for databases 100GB or less.
 
-## [Postgres to PlanetScale for Vitess/MySQL via AWS DMS and an intermediate MySQL](./postgres-mysql-planetscale)
+## [Postgres to PlanetScale for Vitess via AWS DMS and an intermediate MySQL](./postgres-mysql-planetscale)
 
 Thanks to the intermediate MySQL database, this runs faster than the variant above, but has the downside of requiring an additional MySQL instance running during the migration, which adds cost and complexity to the import.
 Recommended for larger imports > 100GB.
