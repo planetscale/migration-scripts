@@ -172,3 +172,4 @@ See also
 * <https://medium.com/hellogetsafe/pulling-off-zero-downtime-postgresql-migrations-with-bucardo-and-terraform-1527cca5f989>
 * <https://github.com/nxt-insurance/bucardo-terraform-archive>
 * <https://bucardo-general.bucardo.narkive.com/hznUofas/replication-of-tables-without-primary-keys>
+* <https://gist.github.com/shalvah/8d8b91d3bfe33f08a2583574b6087426>
