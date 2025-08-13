@@ -72,7 +72,7 @@ Cleanup
 1. Remove the Bucardo sync and metadata:
 
     ```sh
-    sh rmk-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
+    sh rm-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
     ```
 
 2. Optionally, terminate the EC2 instance that was hosting Bucardo.
