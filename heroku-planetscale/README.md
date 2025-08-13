@@ -5,76 +5,37 @@ Heroku notably does not support logical replication, which has left many of its 
 
 There may be a variation of this strategy that uses the [`ff-seq.sh`](../postgres-direct/ff-seq.sh) tool from our logical replication strategy that can provide a true zero-downtime exit strategy from Heroku. [Get in touch](mailto:support@planetscale.com) if this is a requirement for you.
 
-Setup
------
+Setup, bulk copy, and replication
+---------------------------------
 
 1. Launch an EC2 instance where you'll run Bucardo. It must run Linux and have network connectivity to both Heroku and PlanetScale.
 
 2. Install and configure Bucardo there:
 
     ```sh
-    sh install.sh
+    sh install-bucardo.sh
     ```
 
 3. Export two environment variables there:
     * `HEROKU`: URL-formatted Heroku Postgres connection information for the source database.
     * `PLANETSCALE`: Space-delimited PlanetScale for Postgres connection information for the `postgres` role (as shown on the Connect page for your database) for the target database.
 
-Bulk copy and replication
--------------------------
-
-1. Sync table definitions outside of Bucardo (just like we'd do for logical replication and _before adding the databases to Bucardo_):
+4. Configure and start Bucardo:
 
     ```sh
-    pg_dump --no-owner --no-privileges --no-publications --no-subscriptions --schema-only "$HEROKU" | psql "$PLANETSCALE" -a
-    ```
-
-2. Connect the source Heroku Postgres database:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add database "heroku" host="$(echo "$HEROKU" | cut -d "@" -f 2 | cut -d ":" -f 1)" user="$(echo "$HEROKU" | cut -d "/" -f 3 | cut -d ":" -f 1)" password="$(echo "$HEROKU" | cut -d ":" -f 3 | cut -d "@" -f 1)" dbname="$(echo "$HEROKU" | cut -d "/" -f 4 | cut -d "?" -f 1)"
-    ```
-
-3. Connect the target PlanetScale for Postgres database:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add database "planetscale" ${PLANETSCALE%%" ssl"*}
-    ```
-
-4. Add all sequences:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add all sequences --relgroup "planetscale_import"
-    ```
-
-5. Add all tables:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add all tables --relgroup "planetscale_import"
-    ```
-
-6. Create a sync:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add sync "planetscale_import" dbs="heroku,planetscale" onetimecopy=1 relgroup="planetscale_import"
-    ```
-
-7. Start Bucardo replicating:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo reload
+    sh mk-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
     ```
 
 Monitor progress
 ----------------
 
-Bucardo status:
+Use the `stat-bucardo-repl.sh` tool to monitor the overall state of your migration:
 
 ```sh
-sudo -H -u "bucardo" bucardo status
+sh stat-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
 ```
 
-Bucardo's state will bounce between several descriptive values. It's not possible to confirm that your replication is caught up and keeping up based on these state values alone. Instead, you need to confirm that the complete data is present (e.g. by using the `count(*)` aggregation) before moving on.
+It is also wise to directly confirm that the complete data is present (e.g. by using the `count(*)` aggregation or by specifically `SELECT`ing data you know to have just written) before moving on.
 
 Count rows to gauge how caught-up the asynchronous replication is (where `example` is one of your table names):
 
@@ -82,13 +43,7 @@ Count rows to gauge how caught-up the asynchronous replication is (where `exampl
 psql "$HEROKU" -c "SELECT count(*) FROM example;"; psql "$PLANETSCALE" -c "SELECT count(*) FROM example;"
 ```
 
-Run ad-hoc queries against the Bucardo metadata:
-
-```sh
-sudo -H -u "bucardo" psql
-```
-
-Tail the Bucardo logs:
+Finally, in the event of trouble, the Bucardo logs may be illuminating:
 
 ```sh
 tail -F "/var/log/bucardo/log.bucardo"
@@ -97,13 +52,13 @@ tail -F "/var/log/bucardo/log.bucardo"
 Switch traffic
 --------------
 
-Because Bucardo is replicating both table and sequence data, it's critical to stop write traffic at the source completely. Most likely, this can best be accomplished at the application level. However, it is possible to enforce at the database level, too:
+Because Bucardo is replicating both table and sequence data, it's critical to stop write traffic at the source completely. `heroku maintenance:on` can stop all traffic but if you want to continue to allow read traffic, you can either arrange for that at the application level or enforce it at the database level thus:
 
 ```sh
 psql "$HEROKU" -c "REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM $(echo "$HEROKU" | cut -d "/" -f 3 | cut -d ":" -f 1);"
 ```
 
-Once writes have stopped reaching Heroku, it's safe to begin writes to PlanetScale via an application deploy or reconfiguration.
+Once writes have stopped reaching Heroku and replicated to PlanetScale, it's safe to begin writes to PlanetScale via an application deploy or reconfiguration.
 
 If you issued the `REVOKE` statement above and need to abort before switching traffic and return to service on Heroku, revert as follows:
 
@@ -114,57 +69,15 @@ psql "$HEROKU" -c "GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public T
 Cleanup
 -------
 
-1. Stop and remove the Bucardo sync:
+1. Remove the Bucardo sync and metadata:
 
     ```sh
-    sudo -H -u "bucardo" bucardo remove sync "planetscale_import"
+    sh rmk-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
     ```
 
-2. Remove every table from Bucardo's management:
+2. Optionally, terminate the EC2 instance that was hosting Bucardo.
 
-    ```sh
-    sudo -H -u "bucardo" bucardo list tables | cut -d " " -f 3 | xargs sudo -H -u "bucardo" bucardo remove table
-    ```
-
-3. Remove every sequence from Bucardo's management:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo list sequences | cut -d " " -f 2 | xargs sudo -H -u "bucardo" bucardo remove sequence
-    ```
-
-4. Remove intermediate Bucardo grouping objects:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo remove relgroup "planetscale_import" && sudo -H -u "bucardo" bucardo remove dbgroup "planetscale_import"
-    ```
-
-5. Remove the PlanetScale database from Bucardo's management:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo remove database "planetscale"
-    ```
-
-6. Remove the Heroku database from Bucardo's management:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo remove database "heroku"
-    ```
-
-7. Stop Bucardo:
-
-    ```sh
-    sudo -H -i -u "bucardo" bucardo stop
-    ```
-
-8. Remove Bucardo metadata from the Heroku database:
-
-    ```sh
-    psql "$HEROKU" -c "DROP SCHEMA bucardo CASCADE;"
-    ```
-
-8. Optionally, terminate the EC2 instance that was hosting Bucardo.
-
-9. When the migration is complete and validated, delete the source Heroku Postgres database.
+3. When the migration is complete and validated, delete the source Heroku Postgres database.
 
 See also
 --------
@@ -178,3 +91,4 @@ See also
 * <https://medium.com/hellogetsafe/pulling-off-zero-downtime-postgresql-migrations-with-bucardo-and-terraform-1527cca5f989>
 * <https://github.com/nxt-insurance/bucardo-terraform-archive>
 * <https://bucardo-general.bucardo.narkive.com/hznUofas/replication-of-tables-without-primary-keys>
+* <https://gist.github.com/shalvah/8d8b91d3bfe33f08a2583574b6087426>
