@@ -80,13 +80,14 @@ cat "$TMP/status.out"
 echo >&2
 echo "STATUS: $(awk -F " : " '/^Status/ {print $2}' <"$TMP/status.out")"
 printf "INITIAL COPY PHASE: "
-if awk -F " : " '/^Onetimecopy/ {print $2}' <"$TMP/status.out" | grep -q "1"
+if awk -F " : " '/^Onetimecopy/ {print $2}' <"$TMP/status.out" | grep -q "Yes"
 then echo "in-progress"
 else echo "finished"
 fi
 STATE="$(awk -F " : " '/^Current state/ {print $2}' <"$TMP/status.out")"
 printf "STATE: "
 case "$STATE" in
+    "No records found") echo "not-yet-started";;
     "Good"|"Bad") echo "$STATE";;
     *) echo "$STATE (good)";;
 esac
@@ -94,15 +95,22 @@ LAST_ERROR="$(awk -F " : " '/^Last error/ {print $2}' <"$TMP/status.out")"
 if [ "$LAST_ERROR" ]
 then echo "LAST ERROR: $LAST_ERROR"
 fi
-TS_NOW="$(date +"%s")"
-TS_LAST_GOOD="$(date -d "$(
-    awk -F " : " '/^Last good/ {print $2}' <"$TMP/status.out" |
-    cut -c "-21"
-)" +"%s")"
-SECONDS_SINCE_LAST_SYNC="$((TS_NOW - TS_LAST_GOOD))"
-echo "SECONDS SINCE LAST SYNC: $SECONDS_SINCE_LAST_SYNC"
 ROWS_CHANGED="$(awk -F " [:/] " '/^Rows deleted\/inserted/ {print $2+$3}' <"$TMP/status.out")"
-echo "ROWS CHANGED IN LAST SYNC: $ROWS_CHANGED"
+if [ "$ROWS_CHANGED" ]
+then echo "ROWS CHANGED IN LAST SYNC: $ROWS_CHANGED"
+fi
+LAST_GOOD="$(awk -F " : " '/^Last good/ {print $2}' <"$TMP/status.out")"
+SECONDS_SINCE_LAST_SYNC=0
+if [ "$LAST_GOOD" ]
+then
+    TS_NOW="$(date +"%s")"
+    TS_LAST_GOOD="$(date -d "$(
+        awk -F " : " '/^Last good/ {print $2}' <"$TMP/status.out" |
+        cut -c "-21"
+    )" +"%s")"
+    SECONDS_SINCE_LAST_SYNC="$((TS_NOW - TS_LAST_GOOD))"
+    echo "SECONDS SINCE LAST SYNC: $SECONDS_SINCE_LAST_SYNC"
+fi
 if [ "$SECONDS_SINCE_LAST_SYNC" -gt 60 ]
 then
     echo >&2
