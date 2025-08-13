@@ -13,7 +13,7 @@ Setup
 2. Install and configure Bucardo there:
 
     ```sh
-    sh install.sh
+    sh install-bucardo.sh
     ```
 
 3. Export two environment variables there:
