@@ -68,13 +68,13 @@ Bulk copy and replication
 Monitor progress
 ----------------
 
-Bucardo status:
+Use the `stat-bucardo-repl.sh` tool to monitor the overall state of your migration:
 
 ```sh
-sudo -H -u "bucardo" bucardo status
+sh stat-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
 ```
 
-Bucardo's state will bounce between several descriptive values. It's not possible to confirm that your replication is caught up and keeping up based on these state values alone. Instead, you need to confirm that the complete data is present (e.g. by using the `count(*)` aggregation) before moving on.
+It is also wise to directly confirm that the complete data is present (e.g. by using the `count(*)` aggregation or by specifically `SELECT`ing data you know to have just written) before moving on.
 
 Count rows to gauge how caught-up the asynchronous replication is (where `example` is one of your table names):
 
@@ -82,13 +82,7 @@ Count rows to gauge how caught-up the asynchronous replication is (where `exampl
 psql "$HEROKU" -c "SELECT count(*) FROM example;"; psql "$PLANETSCALE" -c "SELECT count(*) FROM example;"
 ```
 
-Run ad-hoc queries against the Bucardo metadata:
-
-```sh
-sudo -H -u "bucardo" psql
-```
-
-Tail the Bucardo logs:
+Finally, in the event of trouble, the Bucardo logs may be illuminating:
 
 ```sh
 tail -F "/var/log/bucardo/log.bucardo"
