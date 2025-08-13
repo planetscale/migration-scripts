@@ -5,8 +5,8 @@ Heroku notably does not support logical replication, which has left many of its 
 
 There may be a variation of this strategy that uses the [`ff-seq.sh`](../postgres-direct/ff-seq.sh) tool from our logical replication strategy that can provide a true zero-downtime exit strategy from Heroku. Get in touch if this is a requirement for you.
 
-Setup
------
+Setup, bulk copy, and replication
+---------------------------------
 
 1. Launch an EC2 instance where you'll run Bucardo. It must run Linux and have network connectivity to both Heroku and PlanetScale.
 
@@ -20,49 +20,10 @@ Setup
     * `HEROKU`: URL-formatted Heroku Postgres connection information for the source database.
     * `PLANETSCALE`: Space-delimited PlanetScale for Postgres connection information for the `postgres` role (as shown on the Connect page for your database) for the target database.
 
-Bulk copy and replication
--------------------------
-
-1. Sync table definitions outside of Bucardo (just like we'd do for logical replication and _before adding the databases to Bucardo_):
+4. Configure and start Bucardo:
 
     ```sh
-    pg_dump --no-owner --no-privileges --no-publications --no-subscriptions --schema-only "$HEROKU" | psql "$PLANETSCALE" -a
-    ```
-
-2. Connect the source Heroku Postgres database:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add database "heroku" host="$(echo "$HEROKU" | cut -d "@" -f 2 | cut -d ":" -f 1)" user="$(echo "$HEROKU" | cut -d "/" -f 3 | cut -d ":" -f 1)" password="$(echo "$HEROKU" | cut -d ":" -f 3 | cut -d "@" -f 1)" dbname="$(echo "$HEROKU" | cut -d "/" -f 4 | cut -d "?" -f 1)"
-    ```
-
-3. Connect the target PlanetScale for Postgres database:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add database "planetscale" ${PLANETSCALE%%" ssl"*}
-    ```
-
-4. Add all sequences:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add all sequences --relgroup "planetscale_import"
-    ```
-
-5. Add all tables:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add all tables --relgroup "planetscale_import"
-    ```
-
-6. Create a sync:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo add sync "planetscale_import" dbs="heroku,planetscale" onetimecopy=1 relgroup="planetscale_import"
-    ```
-
-7. Start Bucardo replicating:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo reload
+    sh mk-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
     ```
 
 Monitor progress
@@ -108,57 +69,15 @@ psql "$HEROKU" -c "GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public T
 Cleanup
 -------
 
-1. Stop and remove the Bucardo sync:
+1. Remove the Bucardo sync and metadata:
 
     ```sh
-    sudo -H -u "bucardo" bucardo remove sync "planetscale_import"
+    sh rmk-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
     ```
 
-2. Remove every table from Bucardo's management:
+2. Optionally, terminate the EC2 instance that was hosting Bucardo.
 
-    ```sh
-    sudo -H -u "bucardo" bucardo list tables | cut -d " " -f 3 | xargs sudo -H -u "bucardo" bucardo remove table
-    ```
-
-3. Remove every sequence from Bucardo's management:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo list sequences | cut -d " " -f 2 | xargs sudo -H -u "bucardo" bucardo remove sequence
-    ```
-
-4. Remove intermediate Bucardo grouping objects:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo remove relgroup "planetscale_import" && sudo -H -u "bucardo" bucardo remove dbgroup "planetscale_import"
-    ```
-
-5. Remove the PlanetScale database from Bucardo's management:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo remove database "planetscale"
-    ```
-
-6. Remove the Heroku database from Bucardo's management:
-
-    ```sh
-    sudo -H -u "bucardo" bucardo remove database "heroku"
-    ```
-
-7. Stop Bucardo:
-
-    ```sh
-    sudo -H -i -u "bucardo" bucardo stop
-    ```
-
-8. Remove Bucardo metadata from the Heroku database:
-
-    ```sh
-    psql "$HEROKU" -c "DROP SCHEMA bucardo CASCADE;"
-    ```
-
-8. Optionally, terminate the EC2 instance that was hosting Bucardo.
-
-9. When the migration is complete and validated, delete the source Heroku Postgres database.
+3. When the migration is complete and validated, delete the source Heroku Postgres database.
 
 See also
 --------
