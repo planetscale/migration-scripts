@@ -26,6 +26,11 @@ then
     )
 fi
 
+sudo tee "/etc/bucardorc" >"/dev/null" <<EOF
+log_level = verbose
+verbose = 1
+EOF
+
 sudo useradd -M -U -d "/var/run/bucardo" -s "/bin/sh" "bucardo" ||
 sudo usermod -d "/var/run/bucardo" -s "/bin/sh" "bucardo"
 sudo mkdir -p "/var/log/bucardo" "/var/run/bucardo"
