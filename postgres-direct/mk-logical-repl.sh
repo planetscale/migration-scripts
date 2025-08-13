@@ -42,11 +42,11 @@ then
     echo "primary wal_level != logical" >&2
     exit 1
 fi
-psql "$PRIMARY" -c "CREATE PUBLICATION _planetscale_import;"
+psql "$PRIMARY" -c "CREATE PUBLICATION _planetscale_import;" || :
 psql "$PRIMARY" -A -c '\dt' -t |
 cut -d "|" -f "2" |
 while read TABLE
-do psql "$PRIMARY" -c "ALTER PUBLICATION _planetscale_import ADD TABLE $TABLE;"
+do psql "$PRIMARY" -c "ALTER PUBLICATION _planetscale_import ADD TABLE \"$TABLE\";"
 done
 
 # Import the primary's schema.
