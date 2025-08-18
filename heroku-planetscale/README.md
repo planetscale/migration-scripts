@@ -12,7 +12,7 @@ Setup, copy, and replication
     * Choose a size with similar CPU and RAM as what you run in Heroku. Don't stress as resizing in PlanetScale is an online operation.
     * Ensure you have at least twice the storage space as Heroku reports using. (Postgres disk usage can vary wildly and Bucardo is not very space-efficient. It is not uncommon for a database to use 50% more or less space on PlanetScale than on Heroku. Automatic vacuuming will return disk usage to its true size over time.) Either choose a PlanetScale Metal size with enough space or visit the Storage tab of the Cluster Configuration page to proactively adjust how much space is available on your network-attached storage volumes.
 
-2. Launch an EC2 instance where you'll run Bucardo. It must run Linux and have network connectivity to both Heroku and PlanetScale.
+2. Launch an EC2 instance where you'll run Bucardo. It must run Linux and have network connectivity to both Heroku and PlanetScale. We recommend something at least medium-sized e.g. t3a.medium.
 
 3. Install and configure Bucardo there:
 
