@@ -24,7 +24,9 @@ Setup, copy, and replication
     * `HEROKU`: URL-formatted Heroku Postgres connection information for the source database.
     * `PLANETSCALE`: Space-delimited PlanetScale for Postgres connection information for the `postgres` role (as shown on the Connect page for your database) for the target database.
 
-5. Configure and start Bucardo:
+5. Ensure via `heroku pg:locks` there are no `VACUUM` queries with `(to prevent wraparound)` running as these will block the creation of triggers in the next step which could in turn block the execution of your application's queries. (If you're following this guide but aren't actually on Heroku, use `SELECT * FROM pg_stat_activity WHERE query LIKE '% (to prevent wraparound)';` instead.)
+
+6. Configure and start Bucardo:
 
     ```sh
     sh mk-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
