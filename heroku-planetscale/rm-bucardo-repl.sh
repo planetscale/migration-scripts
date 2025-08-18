@@ -48,4 +48,6 @@ sudo -H -u "bucardo" bucardo remove dbgroup "planetscale_import"
 sudo -H -u "bucardo" bucardo remove database "planetscale"
 sudo -H -u "bucardo" bucardo remove database "heroku"
 sudo -H -i -u "bucardo" bucardo stop
+psql "$PRIMARY" -A -c "SELECT format('DROP TRIGGER %I ON %I;', tgname, tgrelid::regclass) from pg_trigger where tgname like 'bucardo_%';" -t |
+psql "$PRIMARY" -a
 psql "$PRIMARY" -c "DROP SCHEMA bucardo CASCADE;"
