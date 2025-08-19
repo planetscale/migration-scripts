@@ -10,9 +10,9 @@ Setup, copy, and replication
 
 1. Create a PlanetScale for Postgres database.
     * Choose a size with similar CPU and RAM as what you run in Heroku. Don't stress as resizing in PlanetScale is an online operation.
-    * Ensure you have at least twice the storage space as Heroku reports using. (Postgres disk usage can vary wildly and Bucardo is not very space-efficient. Automatic vacuuming will return disk usage to baseline over time.) Either choose a PlanetScale Metal size with enough space or visit the Storage tab of the Cluster Configuration page to proactively adjust how much space is available on your network-attached storage volumes.
+    * Ensure you have at least twice the storage space as Heroku reports using. (Postgres disk usage can vary wildly and Bucardo is not very space-efficient. It is not uncommon for a database to use 50% more or less space on PlanetScale than on Heroku. Automatic vacuuming will return disk usage to its true size over time.) Either choose a PlanetScale Metal size with enough space or visit the Storage tab of the Cluster Configuration page to proactively adjust how much space is available on your network-attached storage volumes.
 
-2. Launch an EC2 instance where you'll run Bucardo. It must run Linux and have network connectivity to both Heroku and PlanetScale.
+2. Launch an EC2 instance where you'll run Bucardo. It must run Linux and have network connectivity to both Heroku and PlanetScale. We recommend something at least medium-sized e.g. t3a.medium.
 
 3. Install and configure Bucardo there:
 
@@ -24,7 +24,9 @@ Setup, copy, and replication
     * `HEROKU`: URL-formatted Heroku Postgres connection information for the source database.
     * `PLANETSCALE`: Space-delimited PlanetScale for Postgres connection information for the `postgres` role (as shown on the Connect page for your database) for the target database.
 
-5. Configure and start Bucardo:
+5. Ensure via `heroku pg:locks` there are no `VACUUM` queries with `(to prevent wraparound)` running as these will block the creation of triggers in the next step which could in turn block the execution of your application's queries. (If you're following this guide but aren't actually on Heroku, use `SELECT * FROM pg_stat_activity WHERE query LIKE '% (to prevent wraparound)';` instead.)
+
+6. Configure and start Bucardo:
 
     ```sh
     sh mk-bucardo-repl.sh --primary "$HEROKU" --replica "$PLANETSCALE"
