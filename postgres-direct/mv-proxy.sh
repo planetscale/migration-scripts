@@ -48,6 +48,17 @@ SERVER_PASSWORD="$(
 SERVER_PORT="$(psql "$SERVER" -c '\conninfo' | head -n "1" | cut -d '"' -f "10")"
 SERVER_USERNAME="$(psql "$SERVER" -c '\conninfo' | head -n "1" | cut -d '"' -f "4")"
 
+# Wire the same sequence views as we have on the current server into the new
+# one before the proxy switches traffic to it.
+psql "$PROXY" -A -c '\df' -t |
+cut -d "|" -f "2" |
+grep '_view_nextval$' |
+while read VIEW
+do
+    SEQ="${VIEW%"_view_nextval"}"
+    psql "$SERVER" -c "CREATE OR REPLACE VIEW ${SEQ}_view AS SELECT nextval('$SEQ') as val;"
+done
+
 # Fast-forward all the sequences on the new server to positions ahead of the
 # old server via the views on the proxy.
 sh "$(dirname "$0")/ff-seq.sh" --primary "$PROXY" --replica "$SERVER" --skip "$SKIP" --views
