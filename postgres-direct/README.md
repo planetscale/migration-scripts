@@ -23,20 +23,12 @@ Second, ensure there is network connectivity from the Internet to your database 
 
 `rm-logical-repl.sh` tears down the subscription and publication that `mk-logical-repl.sh` setup. Use this after you've switched traffic to PlanetScale.
 
-Switching traffic to PlanetScale with downtime
-----------------------------------------------
+Switching traffic to PlanetScale without downtime using a proxy
+---------------------------------------------------------------
 
-If you're OK taking a brief outage to complete your migration then you can switch traffic very simply:
+This strategy for switching traffic uses a second PlanetScale for Postgres database that acts as a proxy to control the process without downtime.
 
-1. Stop writing to your original primary Postgres database.
-2. Use `ff-seq.sh` to ensure sequences on the replica are ahead of where they are on the primary.
-3. Start writing to your new PlanetScale for Postgres primary.
-4. Use `rm-logical-repl.sh` to teardown logical replication.
-
-Switching traffic to PlanetScale without downtime
--------------------------------------------------
-
-More likely, though, your application cannot tolerate downtime to migrate to PlanetScale for Postgres. This variation uses a second PlanetScale for Postgres database that acts as a proxy to control the process without downtime.
+You cannot use this strategy if your application uses `INSERT ... ON CONFLICT DO UPDATE` query syntax which is not supported by the Postgres Foreign Data Wrapper used by `mk-proxy.sh`.
 
 1. Create a second PlanetScale for Postgres database of equal size to the one receiving logical replication. This one doesn't need to be Metal even if your replica is.
 2. `mk-proxy.sh` to setup this new database as a proxy using Postgres Foreign Data Wrappers.
@@ -46,6 +38,18 @@ More likely, though, your application cannot tolerate downtime to migrate to Pla
 6. Reconfigure your application to send Postgres traffic directly to your real PlanetScale for Postgres database instead of your proxy.
 7. Use `rm-proxy.sh` to teardown the proxy. Delete it from the PlanetScale app.
 8. Use `rm-logical-repl.sh` to teardown logical replication.
+
+Switching traffic to PlanetScale without downtime and without a proxy
+---------------------------------------------------------------------
+
+You can use this strategy if you have tight control over all processes that might write to your Postgres database. It will work even if you use `INSERT ... ON CONFLICT DO UPDATE` query syntax.
+
+After logical replication is setup and caught up, do the following:
+
+1. Use `ff-seq.sh` to ensure sequences on the replica are ahead of where they are on the primary.
+2. Switch all processes from your original primary Postgres database to your new PlanetScale for Postgres primary.
+3. Before one hour (or the number of seconds you provided to the `--skip` option of `ff-seq.sh`) has passed, ensure all processes that might write to your original primary Postgres database have exited.
+4. Use `rm-logical-repl.sh` to teardown logical replication.
 
 Replicating back as a failsafe
 ------------------------------
