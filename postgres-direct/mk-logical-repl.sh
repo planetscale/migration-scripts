@@ -56,7 +56,7 @@ psql "$PRIMARY" -c '\d'
 psql "$REPLICA" -c '\d'
 
 # Subscribe the replica to the primary's logical replication stream.
-psql "$REPLICA" -c "CREATE SUBSCRIPTION _planetscale_import CONNECTION '$PRIMARY' PUBLICATION _planetscale_import;" ||
-psql "$REPLICA" -c "ALTER SUBSCRIPTION _planetscale_import CONNECTION '$PRIMARY';"
+psql "$REPLICA" -c "CREATE SUBSCRIPTION _planetscale_import CONNECTION '$PRIMARY' PUBLICATION _planetscale_import WITH (streaming = on);" ||
+psql "$REPLICA" -c "ALTER SUBSCRIPTION _planetscale_import CONNECTION '$PRIMARY' WITH (streaming = on);"
 
 sh "$(dirname "$0")/stat-logical-repl.sh" --primary "$PRIMARY" --replica "$REPLICA"
