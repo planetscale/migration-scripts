@@ -31,6 +31,7 @@ Metadata:
           - DMSInstanceClass
           - MigrationType
           - EnableAutomation
+          - MigrationBucketName
           - CreateDMSRoles
           - NotificationEmail
     ParameterLabels:
@@ -68,6 +69,8 @@ Metadata:
         default: "Create DMS Roles"
       NotificationEmail:
         default: "Notification Email"
+      MigrationBucketName:
+        default: "Migration Bucket Name"
 
 Parameters:
   # ===========================================
@@ -97,20 +100,30 @@ Parameters:
   SourceEndpointPort:
     Type: Number
     Default: 5432
+    MinValue: 1024
+    MaxValue: 65535
     Description: Aurora PostgreSQL port
   
   SourceDatabaseName:
     Type: String
     Description: Source database name
+    MinLength: 1
+    MaxLength: 63
+    ConstraintDescription: Must start with a letter and contain only alphanumeric characters and underscores
   
   SourceUsername:
     Type: String
     Description: Source database username
+    MinLength: 1
+    MaxLength: 63
+    ConstraintDescription: Must start with a letter and contain only alphanumeric characters and underscores
   
   SourcePassword:
     Type: String
     NoEcho: true
     Description: Source database password
+    MinLength: 4
+    MaxLength: 128
 
   # ===========================================
   # TARGET DATABASE (PlanetScale PostgreSQL)
@@ -122,20 +135,30 @@ Parameters:
   TargetEndpointPort:
     Type: Number
     Default: 5432
+    MinValue: 1024
+    MaxValue: 65535
     Description: PlanetScale PostgreSQL port
   
   TargetDatabaseName:
     Type: String
     Description: Target database name
+    MinLength: 1
+    MaxLength: 63
+    ConstraintDescription: Must start with a letter and contain only alphanumeric characters and underscores
   
   TargetUsername:
     Type: String
     Description: Target database username
+    MinLength: 1
+    MaxLength: 63
+    ConstraintDescription: Must start with a letter and contain only alphanumeric characters and underscores
   
   TargetPassword:
     Type: String
     NoEcho: true
     Description: Target database password
+    MinLength: 4
+    MaxLength: 128
 
   # ===========================================
   # ADDITIONAL FEATURES
@@ -164,6 +187,14 @@ Parameters:
     AllowedPattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$
     ConstraintDescription: Must be a valid email address
 
+  MigrationBucketName:
+    Type: String
+    Description: Base name for the S3 bucket to store DMS assessment reports. Region and account ID will be automatically appended.
+    AllowedPattern: ^[a-z0-9][a-z0-9.-]*[a-z0-9]$
+    ConstraintDescription: Must start and end with lowercase letter or number, can contain lowercase letters, numbers, hyphens, and periods
+    MinLength: 3
+    MaxLength: 35
+
 Resources:
   # SNS Topic for Migration Notifications
   MigrationNotificationsTopic:
@@ -190,7 +221,7 @@ Resources:
   PreMigrationAssessmentBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub '${AWS::StackName}-dms-assessment-${AWS::Region}'
+      BucketName: !Sub '${MigrationBucketName}-${AWS::Region}-${AWS::AccountId}'
       VersioningConfiguration:
         Status: Enabled
       PublicAccessBlockConfiguration:
@@ -293,9 +324,23 @@ Resources:
         - Key: Name
           Value: DMS-ReplicationInstance-SG
 
-  # DMS Subnet Group
-  DMSSubnetGroup:
+  # DMS Subnet Group (when not creating roles)
+  DMSSubnetGroupExistingRoles:
     Type: AWS::DMS::ReplicationSubnetGroup
+    Condition: ExistingDMSRolesCondition
+    Properties:
+      ReplicationSubnetGroupDescription: Subnet group for DMS replication instance
+      ReplicationSubnetGroupIdentifier: dms-subnet-group
+      SubnetIds: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          Value: DMS-SubnetGroup
+
+  # DMS Subnet Group (when creating new roles - depends on DMSVPCROLE)
+  DMSSubnetGroupNewRoles:
+    Type: AWS::DMS::ReplicationSubnetGroup
+    Condition: CreateDMSRolesCondition
+    DependsOn: DMSVPCRole
     Properties:
       ReplicationSubnetGroupDescription: Subnet group for DMS replication instance
       ReplicationSubnetGroupIdentifier: dms-subnet-group
@@ -315,7 +360,10 @@ Resources:
       EngineVersion: 3.6.1
       MultiAZ: false
       PubliclyAccessible: true
-      ReplicationSubnetGroupIdentifier: !Ref DMSSubnetGroup
+      ReplicationSubnetGroupIdentifier: !If 
+        - CreateDMSRolesCondition
+        - !Ref DMSSubnetGroupNewRoles
+        - !Ref DMSSubnetGroupExistingRoles
       VpcSecurityGroupIds:
         - !Ref DMSSecurityGroup
       Tags:
@@ -1408,6 +1456,7 @@ Resources:
 Conditions:
   EnableAutomationCondition: !Equals [!Ref EnableAutomation, 'true']
   CreateDMSRolesCondition: !Equals [!Ref CreateDMSRoles, 'true']
+  ExistingDMSRolesCondition: !Equals [!Ref CreateDMSRoles, 'false']
 
 Outputs:
   ReplicationInstanceArn:
