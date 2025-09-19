@@ -11,7 +11,7 @@ Migrating data via logical replication
 First, enable logical replication in your source Postgres database by setting `wal_level = logical`. Some providers expose this setting under a different name:
 
 * In Amazon Aurora this is the `rds.logical_replication` parameter in the database cluster parameter group (and takes a while to apply, even if you apply immediately).
-* In Google CloudSQL this is the `cloudsql.enable_pglogical` setting (and note that this does _not_ require `CREATE EXTENSION pglogical;`).
+* In Google CloudSQL this is the `cloudsql.logical_decoding` setting (and note that this does _not_ require `CREATE EXTENSION pglogical;` or `cloudsql.enable_pglogical`).
 * In Neon this is a database-level setting.
 * Alas, in Heroku this is not supported at all.
 
