@@ -86,7 +86,7 @@ Parameters:
 
   DMSInstanceClass:
     Type: String
-    Default: dms.c6i.large
+    Default: dms.c6i.xlarge
     AllowedValues: [dms.c5.xlarge, dms.c6i.large, dms.c6i.xlarge, dms.c6i.2xlarge, dms.c6i.4xlarge, dms.c6i.8xlarge, dms.c6i.12xlarge, dms.c6i.16xlarge, dms.c6i.24xlarge]
     Description: DMS replication instance class
 
@@ -355,7 +355,7 @@ Resources:
     Properties:
       ReplicationInstanceIdentifier: aurora-to-planetscale-postgres
       ReplicationInstanceClass: !Ref DMSInstanceClass
-      AllocatedStorage: 50
+      AllocatedStorage: 500
       AutoMinorVersionUpgrade: true
       EngineVersion: 3.6.1
       MultiAZ: false
@@ -436,28 +436,22 @@ Resources:
             "TargetSchema": "",
             "SupportLobs": true,
             "FullLobMode": true,
-            "LobChunkSize": 64,
+            "LobChunkSize": 32,
             "LimitedSizeLobMode": false,
-            "LobMaxSize": 32,
+            "LobMaxSize": 0,
             "InlineLobMaxSize": 32,
             "LoadMaxFileSize": 0,
-            "ParallelLoadThreads": 0,
-            "ParallelLoadBufferSize": 0,
-            "BatchApplyEnabled": false,
-            "TaskRecoveryTableEnabled": false,
-            "ParallelApplyThreads": 0,
-            "ParallelApplyBufferSize": 0,
-            "ParallelApplyQueuesPerThread": 0,
-            "ParallelLoadQueuesPerThread": 0
+            "BatchApplyEnabled": true,
+            "TaskRecoveryTableEnabled": false
           },
-          "FullLoadSettings": {
+         "FullLoadSettings": {
             "TargetTablePrepMode": "DROP_AND_CREATE",
             "CreatePkAfterFullLoad": false,
             "StopTaskCachedChangesApplied": false,
             "StopTaskCachedChangesNotApplied": false,
-            "MaxFullLoadSubTasks": 16,
+            "MaxFullLoadSubTasks": 8,
             "TransactionConsistencyTimeout": 600,
-            "CommitRate": 1000,
+            "CommitRate": 10000,
             "FullLoadIgnoreConflicts": true
           },
           "Logging": {
@@ -487,9 +481,8 @@ Resources:
             ]
           },
           "ControlTablesSettings": {
-            "historyTimeslotInMinutes": 5,
-            "ControlSchema": "",
             "HistoryTimeslotInMinutes": 5,
+            "ControlSchema": "",
             "HistoryTableEnabled": false,
             "SuspendedTablesTableEnabled": false,
             "StatusTableEnabled": false,
@@ -497,9 +490,9 @@ Resources:
             "FullLoadExceptionTableEnabled": false
           },
           "StreamBufferSettings": {
-            "StreamBufferCount": 3,
-            "CtrlStreamBufferSizeInMB": 5,
-            "StreamBufferSizeInMB": 8
+            "StreamBufferCount": 8,
+            "CtrlStreamBufferSizeInMB": 8,
+            "StreamBufferSizeInMB": 32
           },
           "ErrorBehavior": {
             "FailOnNoTablesCaptured": true,
@@ -532,7 +525,7 @@ Resources:
             "EnableTT": false
           },
           "ValidationSettings": {
-            "EnableValidation": false,
+            "EnableValidation": true,
             "ValidationMode": "ROW_LEVEL",
             "ThreadCount": 5,
             "FailureMaxCount": 10000,
@@ -552,16 +545,16 @@ Resources:
           "FailTaskWhenCleanTaskResourceFailed": false,
           "ChangeProcessingTuning": {
             "StatementCacheSize": 50,
-            "CommitTimeout": 1,
+            "CommitTimeout": 5,
             "RecoveryTimeout": -1,
             "BatchApplyPreserveTransaction": true,
             "BatchApplyTimeoutMin": 1,
             "BatchSplitSize": 0,
             "BatchApplyTimeoutMax": 30,
-            "MinTransactionSize": 1000,
+            "MinTransactionSize": 5000,
             "MemoryKeepTime": 60,
-            "BatchApplyMemoryLimit": 500,
-            "MemoryLimitTotal": 1024
+            "BatchApplyMemoryLimit": 1000,
+            "MemoryLimitTotal": 2048
           },
           "ChangeProcessingDdlHandlingPolicy": {
             "HandleSourceTableDropped": true,
