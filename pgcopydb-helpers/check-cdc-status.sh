@@ -127,28 +127,36 @@ if [ -n "$APPLY_LSN" ] && [ -n "$STREAM_LSN" ]; then
     if [ -n "$FIRST_APPLY_LSN" ] && [ -n "$FIRST_APPLY_TS" ] && [ -n "$NOW_EPOCH" ]; then
         FIRST_BYTES=$(( (16#$(echo "$FIRST_APPLY_LSN" | cut -d/ -f1) * 4294967296) + 16#$(echo "$FIRST_APPLY_LSN" | cut -d/ -f2) ))
         APPLIED_BYTES=$((APPLY_BYTES - FIRST_BYTES))
-        APPLIED_GB=$((APPLIED_BYTES / 1073741824))
+        APPLIED_MB=$((APPLIED_BYTES / 1048576))
 
         # Compute elapsed seconds from first apply log entry to now
         FIRST_EPOCH=$(date -d "$FIRST_APPLY_TS" +%s 2>/dev/null || true)
 
         if [ -n "$FIRST_EPOCH" ]; then
             ELAPSED_SEC=$((NOW_EPOCH - FIRST_EPOCH))
-            if [ "$ELAPSED_SEC" -gt 60 ]; then
-                ELAPSED_HR=$(echo "scale=2; $ELAPSED_SEC / 3600" | bc 2>/dev/null || true)
+            if [ "$ELAPSED_SEC" -gt 60 ] && [ "$APPLIED_MB" -gt 0 ]; then
+                ELAPSED_HR=$(echo "scale=4; $ELAPSED_SEC / 3600" | bc 2>/dev/null || true)
                 if [ -n "$ELAPSED_HR" ] && [ "$ELAPSED_HR" != "0" ]; then
-                    RATE_GB_HR=$(echo "scale=1; $APPLIED_GB / $ELAPSED_HR" | bc 2>/dev/null || true)
-                    if [ -n "$RATE_GB_HR" ] && [ "$RATE_GB_HR" != "0" ]; then
-                        APPLY_RATE="${RATE_GB_HR} GB/hr"
-                        if [ "$GAP_GB" -gt 0 ]; then
+                    # Use MB for precision, convert to GB/hr for display
+                    RATE_MB_HR=$(echo "scale=1; $APPLIED_MB / $ELAPSED_HR" | bc 2>/dev/null || true)
+                    if [ -n "$RATE_MB_HR" ] && [ "$RATE_MB_HR" != "0" ] && [ "$RATE_MB_HR" != ".0" ]; then
+                        RATE_GB_HR=$(echo "scale=1; $RATE_MB_HR / 1024" | bc 2>/dev/null || true)
+                        if [ -n "$RATE_GB_HR" ] && [ "$RATE_GB_HR" != "0" ] && [ "$RATE_GB_HR" != ".0" ]; then
+                            APPLY_RATE="${RATE_GB_HR} GB/hr"
+                        else
+                            APPLY_RATE="${RATE_MB_HR} MB/hr"
+                        fi
+                        if [ "$GAP_GB" -gt 0 ] && [ -n "$RATE_GB_HR" ] && [ "$RATE_GB_HR" != "0" ] && [ "$RATE_GB_HR" != ".0" ]; then
                             ETA_HR=$(echo "scale=1; $GAP_GB / $RATE_GB_HR" | bc 2>/dev/null || true)
                             if [ -n "$ETA_HR" ]; then
                                 ETA="${ETA_HR}h"
                             fi
-                        elif [ "$GAP_MB" -gt 0 ]; then
-                            ETA_MIN=$(echo "scale=0; $GAP_MB * 60 / ($RATE_GB_HR * 1024)" | bc 2>/dev/null || true)
-                            if [ -n "$ETA_MIN" ]; then
+                        elif [ "$GAP_MB" -gt 0 ] && [ -n "$RATE_MB_HR" ] && [ "$RATE_MB_HR" != "0" ]; then
+                            ETA_MIN=$(echo "scale=0; $GAP_MB * 60 / $RATE_MB_HR" | bc 2>/dev/null || true)
+                            if [ -n "$ETA_MIN" ] && [ "$ETA_MIN" != "0" ]; then
                                 ETA="${ETA_MIN}m"
+                            else
+                                ETA="<1m"
                             fi
                         fi
                     fi
@@ -165,6 +173,8 @@ RESTART_LAG=""
 WAL_STATUS=""
 DB_SIZE=""
 CURRENT_WAL_LSN=""
+TOTAL_GAP_MB=""
+TOTAL_GAP_GB=""
 
 if [ -n "${PGCOPYDB_SOURCE_PGURI:-}" ]; then
     # Get replication slot stats for the pgcopydb slot
@@ -191,6 +201,42 @@ if [ -n "${PGCOPYDB_SOURCE_PGURI:-}" ]; then
 
     DB_SIZE=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c \
         "SELECT pg_size_pretty(pg_database_size(current_database()));" 2>/dev/null || true)
+
+    # Compute total gap: apply LSN → current source WAL (the true end-to-end lag)
+    if [ -n "$APPLY_LSN" ] && [ -n "$CURRENT_WAL_LSN" ]; then
+        SRC_HI=$(echo "$CURRENT_WAL_LSN" | cut -d/ -f1)
+        SRC_LO=$(echo "$CURRENT_WAL_LSN" | cut -d/ -f2)
+        SRC_BYTES=$(( (16#$SRC_HI * 4294967296) + 16#$SRC_LO ))
+        TOTAL_GAP_BYTES=$((SRC_BYTES - APPLY_BYTES))
+        if [ "$TOTAL_GAP_BYTES" -lt 0 ]; then
+            TOTAL_GAP_BYTES=0
+        fi
+        TOTAL_GAP_MB=$((TOTAL_GAP_BYTES / 1048576))
+        TOTAL_GAP_GB=$((TOTAL_GAP_MB / 1024))
+
+        # Re-evaluate caught-up status using total gap (apply → source WAL)
+        CAUGHT_UP=""
+        if [ "$TOTAL_GAP_MB" -le 100 ]; then
+            CAUGHT_UP="YES"
+        fi
+        # Update ETA based on total gap
+        if [ -z "$CAUGHT_UP" ] && [ -n "$RATE_MB_HR" ] && [ "$RATE_MB_HR" != "0" ] && [ "$RATE_MB_HR" != ".0" ]; then
+            if [ "$TOTAL_GAP_GB" -gt 0 ]; then
+                RATE_GB_HR=$(echo "scale=1; $RATE_MB_HR / 1024" | bc 2>/dev/null || true)
+                ETA_HR=$(echo "scale=1; $TOTAL_GAP_GB / $RATE_GB_HR" | bc 2>/dev/null || true)
+                if [ -n "$ETA_HR" ]; then
+                    ETA="${ETA_HR}h"
+                fi
+            elif [ "$TOTAL_GAP_MB" -gt 0 ]; then
+                ETA_MIN=$(echo "scale=0; $TOTAL_GAP_MB * 60 / $RATE_MB_HR" | bc 2>/dev/null || true)
+                if [ -n "$ETA_MIN" ] && [ "$ETA_MIN" != "0" ]; then
+                    ETA="${ETA_MIN}m"
+                else
+                    ETA="<1m"
+                fi
+            fi
+        fi
+    fi
 fi
 
 # --- 7. Get log timestamp for freshness ---
@@ -224,7 +270,18 @@ else
     echo "  Streaming LSN:   (not found in log)"
 fi
 if [ -n "$CAUGHT_UP" ]; then
-    echo "  *** CDC IS CAUGHT UP (gap: ${GAP_MB} MB) ***"
+    if [ -n "$TOTAL_GAP_MB" ]; then
+        echo "  *** CDC IS CAUGHT UP (total lag: ${TOTAL_GAP_MB} MB) ***"
+    else
+        echo "  *** CDC IS CAUGHT UP (apply gap: ${GAP_MB} MB) ***"
+    fi
+elif [ -n "$TOTAL_GAP_MB" ]; then
+    if [ "$TOTAL_GAP_GB" -gt 0 ]; then
+        echo "  Total backlog:   ~${TOTAL_GAP_GB} GB (${TOTAL_GAP_MB} MB)"
+    else
+        echo "  Total backlog:   ${TOTAL_GAP_MB} MB"
+    fi
+    echo "    Apply → Stream:  ${GAP_MB} MB    Stream → Source: $((TOTAL_GAP_MB - GAP_MB)) MB"
 elif [ -n "$GAP_MB" ]; then
     if [ "$GAP_GB" -gt 0 ]; then
         echo "  Apply backlog:   ~${GAP_GB} GB (${GAP_MB} MB)"

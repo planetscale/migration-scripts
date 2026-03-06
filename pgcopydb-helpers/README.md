@@ -94,6 +94,14 @@ Before starting the migration, compare PostgreSQL parameters between source and 
 ~/compare-pg-params.sh
 ```
 
+Run the preflight check to validate that both databases and the migration instance are ready. This checks connectivity, WAL level, replication permissions, available slots/senders, conflicting publications, and local prerequisites:
+
+```bash
+~/preflight-check.sh
+```
+
+Fix any FAILs before proceeding. Warnings should be reviewed — particularly `wal_sender_timeout` (set to `0` for large migrations) and leftover pgcopydb state from previous attempts.
+
 If you are running a live migration with CDC (`--follow`), fix replica identity on tables that lack a primary key:
 
 ```bash
@@ -339,6 +347,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | Script | Phase | Description |
 |--------|-------|-------------|
 | `compare-pg-params.sh` | Prepare | Compare PostgreSQL parameters between source and target |
+| `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots) |
 | `fix-replica-identity.sh` | Prepare | Set REPLICA IDENTITY FULL on tables without primary keys |
 | `filters.ini` | Prepare | pgcopydb filter configuration |
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |

@@ -35,6 +35,29 @@ Compares performance-relevant PostgreSQL parameters between source and target da
 
 ---
 
+#### `preflight-check.sh`
+
+Validates all migration prerequisites before starting `pgcopydb clone --follow`. Checks source, target, and migration instance, reporting PASS/WARN/FAIL for each item.
+
+```bash
+~/preflight-check.sh
+```
+
+**Checks performed:**
+- **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, prepared transactions
+- **Target:** connectivity, replication permission, leftover pgcopydb schema
+- **Instance:** `~/filters.ini` exists, pgcopydb binary on PATH
+
+**When to use:** Before every migration attempt. Run after setting up `~/.env` and `~/filters.ini` but before `~/start-migration-screen.sh`. Fix all FAILs before proceeding. Review WARNs — especially `wal_sender_timeout` (should be `0` for large migrations) and leftover state from previous attempts.
+
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
+
+**Exit code:** 0 if no FAILs, 1 if any FAILs.
+
+**Read-only** — makes no modifications to either database.
+
+---
+
 #### `fix-replica-identity.sh`
 
 Finds tables on the source that have default replica identity and no primary key or unique index, then generates `ALTER TABLE ... REPLICA IDENTITY FULL` statements. Previews the statements and prompts before applying.
@@ -341,6 +364,7 @@ sqlite3 ~/migration_*/schema/filter.db \
    - Set up ~/.env with connection strings
    - Customize ~/filters.ini for your source
    - Run ~/compare-pg-params.sh to review parameter differences
+   - Run ~/preflight-check.sh to validate prerequisites (fix FAILs before proceeding)
    - Run ~/fix-replica-identity.sh if using CDC (--follow)
 
 2. MIGRATE
