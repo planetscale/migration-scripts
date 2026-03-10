@@ -33,6 +33,8 @@ if [ -z "$MIGRATION_DIR" ]; then
     exit 1
 fi
 
+LOG="$MIGRATION_DIR/migration.log"
+
 echo "════════════════════════════════════════════════════════════════"
 echo "                    MIGRATION STATUS SUMMARY"
 echo "════════════════════════════════════════════════════════════════"
@@ -44,27 +46,25 @@ echo "Started: $START_TIME"
 echo ""
 
 RUNNING_PROCS=$(ps aux | grep "[p]gcopydb.*clone" | wc -l | xargs)
+ALL_STEPS_DONE=false
 
-if [ -f "$MIGRATION_DIR/migration.log" ]; then
-    if grep -q "Migration SUCCEEDED\|All step are now done" "$MIGRATION_DIR/migration.log" 2>/dev/null; then
+if [ -f "$LOG" ]; then
+    if grep -q "All step are now done" "$LOG" 2>/dev/null; then
+        ALL_STEPS_DONE=true
+    fi
+    if grep -q "Migration SUCCEEDED" "$LOG" 2>/dev/null; then
         echo -e "${GREEN}Status: COMPLETED${NC}"
-        MIGRATION_COMPLETE=true
     elif [ "$RUNNING_PROCS" -gt 0 ]; then
         echo -e "${GREEN}Status: RUNNING${NC} ($RUNNING_PROCS pgcopydb processes active)"
-        MIGRATION_COMPLETE=false
     else
         echo -e "${YELLOW}Status: NOT RUNNING${NC} (may be stopped or failed)"
-        MIGRATION_COMPLETE=false
     fi
 else
     echo -e "${YELLOW}Status: Unknown${NC}"
-    MIGRATION_COMPLETE=false
 fi
 echo ""
 
 # Get actual counts for determining phase completion
-# With --split-tables-larger-than, split tables have multiple parts tracked in s_table_part.
-# Each part is a separate copy task. Count total copy tasks = (non-split tables) + (split parts).
 SPLIT_TABLES=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(DISTINCT oid) FROM s_table_part;" 2>/dev/null || echo "0")
 SPLIT_PARTS=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(*) FROM s_table_part;" 2>/dev/null || echo "0")
 NONSPLIT_TABLES=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(*) FROM s_table t WHERE NOT EXISTS (SELECT 1 FROM s_table_part p WHERE p.oid = t.oid);" 2>/dev/null || echo "0")
@@ -73,7 +73,6 @@ TABLES_STARTED=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(*) FROM
 TABLES_DONE=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(*) FROM summary WHERE tableoid IS NOT NULL AND done_time_epoch IS NOT NULL;" 2>/dev/null || echo "0")
 TABLES_IN_PROGRESS=$((TABLES_STARTED - TABLES_DONE))
 
-# Calculate data transferred for tables
 BYTES_TRANSFERRED=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COALESCE(SUM(bytes), 0) FROM summary WHERE tableoid IS NOT NULL;" 2>/dev/null || echo "0")
 GB_TRANSFERRED=$(echo "scale=2; $BYTES_TRANSFERRED / 1024 / 1024 / 1024" | bc 2>/dev/null || echo "0")
 
@@ -87,14 +86,52 @@ CONSTRAINTS_STARTED=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(DI
 CONSTRAINTS_DONE=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(DISTINCT conoid) FROM summary WHERE conoid IS NOT NULL AND done_time_epoch IS NOT NULL;" 2>/dev/null || echo "0")
 CONSTRAINTS_IN_PROGRESS=$((CONSTRAINTS_STARTED - CONSTRAINTS_DONE))
 
-echo "────────────────────────────────────────────────────────────────"
-echo "MIGRATION PHASES"
-echo "────────────────────────────────────────────────────────────────"
+VACUUM_TOTAL=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(*) FROM s_table;" 2>/dev/null || echo "0")
+VACUUM_DONE=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(*) FROM vacuum_summary WHERE done_time_epoch > 0;" 2>/dev/null || echo "0")
+VACUUM_DONE=$((VACUUM_DONE + 0))
 
-STEP1=$(grep -q "Fetched information for.*tables" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "done" || echo "pending")
-STEP2=$(grep -q "STEP 2: dump the source database schema" "$MIGRATION_DIR/migration.log" 2>/dev/null && grep -q "pg_dump.*post-data" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "done" || (grep -q "STEP 2:" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "running" || echo "pending"))
-STEP3=$(grep -q "STEP 3: restore the pre-data section" "$MIGRATION_DIR/migration.log" 2>/dev/null && grep -q "errors ignored on restore:\|Skipping pre-data" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "done" || (grep -q "STEP 3:" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "running" || echo "pending"))
+# ── Phase detection ──
+# pgcopydb runs phases sequentially. If a later phase started, prior ones are done.
+# Log markers:
+#   STEP 1 → "STEP 1: fetch source"
+#   STEP 2 → "STEP 2: dump the source"
+#   STEP 3 → "STEP 3: restore the pre-data"
+#   STEP 4 → "STEP 4: starting.*COPY"        (also: table copy data in summary table)
+#   STEP 8 → "STEP 8: starting.*VACUUM"      (also: vacuum_summary table)
+#   STEP 9 → "STEP 9: reset sequences"
+#   STEP 10 → "STEP 10: restore the post-data"
+#   Done   → "All step are now done"
 
+has_step() { grep -q "$1" "$LOG" 2>/dev/null; }
+
+# Phase 1: Catalog
+if has_step "STEP 1:"; then
+    # Done if step 2 started or later
+    if has_step "STEP 2:"; then STEP1="done"; else STEP1="running"; fi
+else
+    STEP1="pending"
+fi
+
+# Phase 2: Dump schema
+if has_step "STEP 2:"; then
+    if has_step "STEP 3:"; then STEP2="done"; else STEP2="running"; fi
+else
+    STEP2="pending"
+fi
+
+# Phase 3: Restore pre-data
+if has_step "STEP 3:"; then
+    # Done if step 4 started (table copy began)
+    if [ "$TABLES_STARTED" -gt 0 ] || has_step "STEP 4:"; then
+        STEP3="done"
+    else
+        STEP3="running"
+    fi
+else
+    STEP3="pending"
+fi
+
+# Phase 4: Copy table data
 if [ "$TABLES_TOTAL" -gt 0 ] && [ "$TABLES_DONE" -eq "$TABLES_TOTAL" ]; then
     STEP4="done"
 elif [ "$TABLES_STARTED" -gt 0 ]; then
@@ -103,6 +140,7 @@ else
     STEP4="pending"
 fi
 
+# Phase 6: Create indexes
 if [ "$INDEXES_TOTAL" -gt 0 ] && [ "$INDEXES_DONE" -eq "$INDEXES_TOTAL" ]; then
     STEP6="done"
 elif [ "$INDEXES_STARTED" -gt 0 ]; then
@@ -111,6 +149,7 @@ else
     STEP6="pending"
 fi
 
+# Phase 7: Create constraints
 if [ "$CONSTRAINTS_TOTAL" -gt 0 ] && [ "$CONSTRAINTS_DONE" -eq "$CONSTRAINTS_TOTAL" ]; then
     STEP7="done"
 elif [ "$CONSTRAINTS_STARTED" -gt 0 ]; then
@@ -119,9 +158,48 @@ else
     STEP7="pending"
 fi
 
-STEP8=$(grep -q "STEP 8:.*VACUUM" "$MIGRATION_DIR/migration.log" 2>/dev/null && grep -q "VACUUM.*done" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "done" || (grep -q "VACUUM" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "running" || echo "pending"))
-STEP9=$(grep -q "STEP 9: reset sequences" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "done" || echo "pending")
-STEP10=$(grep -q "restore.*post-data" "$MIGRATION_DIR/migration.log" 2>/dev/null && grep -q "REFRESH MATERIALIZED VIEW" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "done" || (grep -q "post-data" "$MIGRATION_DIR/migration.log" 2>/dev/null && echo "running" || echo "pending"))
+# Phase 8: Vacuum
+# Vacuum runs concurrently with table copy, so "started" doesn't mean copy is done.
+# It's done when all tables have been vacuumed, or when step 9 started.
+if [ "$VACUUM_TOTAL" -gt 0 ] && [ "$VACUUM_DONE" -ge "$VACUUM_TOTAL" ]; then
+    STEP8="done"
+elif has_step "STEP 9:"; then
+    # Sequences started means vacuum is done
+    STEP8="done"
+elif [ "$VACUUM_DONE" -gt 0 ]; then
+    STEP8="running"
+elif has_step "STEP 8:"; then
+    STEP8="running"
+else
+    STEP8="pending"
+fi
+
+# Phase 9: Reset sequences
+if has_step "STEP 9:"; then
+    # Done if step 10 started or all steps done
+    if has_step "STEP 10:" || [ "$ALL_STEPS_DONE" = true ]; then
+        STEP9="done"
+    else
+        STEP9="running"
+    fi
+else
+    STEP9="pending"
+fi
+
+# Phase 10: Restore post-data
+if has_step "STEP 10:"; then
+    if [ "$ALL_STEPS_DONE" = true ]; then
+        STEP10="done"
+    else
+        STEP10="running"
+    fi
+else
+    STEP10="pending"
+fi
+
+echo "────────────────────────────────────────────────────────────────"
+echo "MIGRATION PHASES"
+echo "────────────────────────────────────────────────────────────────"
 
 status_icon() {
     case "$1" in
@@ -153,7 +231,11 @@ else
     echo -e "  $(status_icon $STEP7) Phase 7: Create constraints ($CONSTRAINTS_DONE/$CONSTRAINTS_TOTAL complete)"
 fi
 
-echo -e "  $(status_icon $STEP8) Phase 8: Vacuum and analyze"
+VACUUM_PCT=0
+if [ "$VACUUM_TOTAL" -gt 0 ]; then
+    VACUUM_PCT=$(echo "scale=1; 100 * $VACUUM_DONE / $VACUUM_TOTAL" | bc 2>/dev/null || echo "0")
+fi
+echo -e "  $(status_icon $STEP8) Phase 8: Vacuum and analyze ($VACUUM_DONE/$VACUUM_TOTAL, $VACUUM_PCT%)"
 echo -e "  $(status_icon $STEP9) Phase 9: Reset sequences"
 echo -e "  $(status_icon $STEP10) Phase 10: Post-data (materialized views)"
 echo ""
@@ -197,41 +279,22 @@ else
     echo "Constraints: $CONSTRAINTS_DONE/$CONSTRAINTS_TOTAL ($CONSTRAINTS_PCT%)"
 fi
 
-# Vacuum progress
-VACUUM_TOTAL=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(*) FROM s_table;" 2>/dev/null || echo "0")
-VACUUM_DONE=$(sqlite3 "$MIGRATION_DIR/schema/source.db" "SELECT COUNT(*) FROM vacuum_summary WHERE done_time_epoch > 0;" 2>/dev/null || echo "0")
-VACUUM_DONE=$((VACUUM_DONE + 0))
-VACUUM_PCT=0
-if [ "$VACUUM_TOTAL" -gt 0 ]; then
-    VACUUM_PCT=$(echo "scale=1; 100 * $VACUUM_DONE / $VACUUM_TOTAL" | bc 2>/dev/null || echo "0")
-fi
 echo "Vacuum:      $VACUUM_DONE/$VACUUM_TOTAL ($VACUUM_PCT%)"
-
-# Post-data restore progress
-POSTDATA_STATUS="pending"
-if grep -q "STEP 5: restore the post-data" "$MIGRATION_DIR/migration.log" 2>/dev/null; then
-    if grep -q "All step are now done\|post-data.*done" "$MIGRATION_DIR/migration.log" 2>/dev/null; then
-        POSTDATA_STATUS="complete"
-    else
-        POSTDATA_STATUS="in progress"
-    fi
-fi
-echo "Post-data:   $POSTDATA_STATUS"
 
 # CDC streaming progress
 if [ -d "$MIGRATION_DIR/cdc" ]; then
     CDC_FILES=$(ls -1 "$MIGRATION_DIR/cdc/"*.sql 2>/dev/null | wc -l | xargs)
     if [ "$CDC_FILES" -gt 0 ]; then
-        LAST_LSN=$(grep "Reported write_lsn" "$MIGRATION_DIR/migration.log" 2>/dev/null | tail -1 | grep -oP 'write_lsn \K[0-9A-Fa-f]+/[0-9A-Fa-f]+' || true)
+        LAST_LSN=$(grep "Reported write_lsn" "$LOG" 2>/dev/null | tail -1 | grep -oP 'write_lsn \K[0-9A-Fa-f]+/[0-9A-Fa-f]+' || true)
         echo "CDC files:   $CDC_FILES SQL files transformed${LAST_LSN:+, streaming at $LAST_LSN}"
     fi
 fi
 
-# Error count — check all error sources
-LOG_ERRORS=$(grep -c " ERROR " "$MIGRATION_DIR/migration.log" 2>/dev/null || echo "0")
+# Error count
+LOG_ERRORS=$(grep -c " ERROR " "$LOG" 2>/dev/null || echo "0")
 LOG_ERRORS=$(echo "$LOG_ERRORS" | tr -d '[:space:]')
 LOG_ERRORS=$((LOG_ERRORS + 0))
-RESTORE_ERROR_LINE=$(grep "errors ignored on restore:" "$MIGRATION_DIR/migration.log" 2>/dev/null | tail -1)
+RESTORE_ERROR_LINE=$(grep "errors ignored on restore:" "$LOG" 2>/dev/null | tail -1)
 RESTORE_ERRORS=$(echo "$RESTORE_ERROR_LINE" | sed -n 's/.*errors ignored on restore: \([0-9]\+\).*/\1/p')
 RESTORE_ERRORS=$((${RESTORE_ERRORS:-0} + 0))
 
@@ -246,7 +309,7 @@ else
         fi
     fi
     if [ "$LOG_ERRORS" -gt 0 ]; then
-        LAST_LOG_ERROR=$(grep " ERROR " "$MIGRATION_DIR/migration.log" 2>/dev/null | tail -1 | cut -c1-120)
+        LAST_LOG_ERROR=$(grep " ERROR " "$LOG" 2>/dev/null | tail -1 | cut -c1-120)
         echo -e "             ${RED}$LOG_ERRORS ERROR lines in log${NC}"
         echo "             Last: $LAST_LOG_ERROR"
     fi
@@ -262,8 +325,8 @@ echo ""
 echo "────────────────────────────────────────────────────────────────"
 echo "RECENT ACTIVITY (Last 10 log lines)"
 echo "────────────────────────────────────────────────────────────────"
-if [ -f "$MIGRATION_DIR/migration.log" ]; then
-    tail -10 "$MIGRATION_DIR/migration.log" | sed 's/^/  /'
+if [ -f "$LOG" ]; then
+    tail -10 "$LOG" | sed 's/^/  /'
 fi
 
 echo ""
@@ -287,7 +350,6 @@ echo "────────────────────────�
 echo "ACTIVE DATABASE OPERATIONS"
 echo "────────────────────────────────────────────────────────────────"
 
-# Check for active queries on target database
 if [ -n "$PGCOPYDB_TARGET_PGURI" ]; then
     ACTIVE_QUERIES=$(psql "$PGCOPYDB_TARGET_PGURI" -t -A -F $'\t' -c "
         SELECT
