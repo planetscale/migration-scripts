@@ -9,6 +9,9 @@ Migration toolkit for [pgcopydb](https://github.com/planetscale/pgcopydb) — us
 **Permissions:** The migration user needs access to all schemas and tables being migrated. For CDC migrations (`--follow`), it also needs the `REPLICATION` attribute. If you are using a dedicated migration user rather than the database owner, grant the following:
 
 ```sql
+-- Create the migration user
+CREATE ROLE migration_user WITH LOGIN PASSWORD 'your-strong-password' REPLICATION;
+
 -- Connect and schema access
 GRANT CONNECT ON DATABASE mydb TO migration_user;
 GRANT USAGE ON SCHEMA public TO migration_user;
@@ -19,12 +22,40 @@ GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO migration_user;
 
 -- For future tables created before migration starts
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO migration_user;
-
--- Replication attribute (required for CDC migrations)
-ALTER ROLE migration_user WITH REPLICATION;
 ```
 
 Repeat the `GRANT USAGE`, `GRANT SELECT`, and `ALTER DEFAULT PRIVILEGES` statements for each schema being migrated.
+
+**`fix-replica-identity.sh` permissions:** The script runs `ALTER TABLE ... REPLICA IDENTITY FULL` on the source, which requires table ownership — `SELECT` alone is not sufficient. Grant `migration_user` membership in the role(s) that own the tables so it inherits ownership privileges. First, find which owner roles are involved:
+
+```sql
+-- Find roles that own tables without a primary key or unique index
+SELECT DISTINCT r.rolname AS owner_role
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_roles r ON r.oid = c.relowner
+WHERE c.relkind = 'r'
+  AND c.relreplident = 'd'
+  AND n.nspname NOT LIKE 'pg_%'
+  AND n.nspname != 'information_schema'
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_constraint con
+    WHERE con.conrelid = c.oid
+      AND con.contype IN ('p', 'u')
+  );
+```
+
+Then grant membership for each `owner_role` returned:
+
+```sql
+GRANT <owner_role> TO migration_user;
+```
+
+After running `fix-replica-identity.sh`, revoke the membership:
+
+```sql
+REVOKE <owner_role> FROM migration_user;
+```
 
 **Logical replication (CDC only):** Logical replication must be enabled on the source before starting a `--follow` migration. How to enable it depends on your platform:
 
