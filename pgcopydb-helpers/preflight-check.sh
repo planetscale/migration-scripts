@@ -180,12 +180,45 @@ else
     warn "Prepared transactions" "$PREP_COUNT found (can block slot creation)"
 fi
 
+# 10. Source user read permissions
+# CONNECT on the database (already connected, but explicit grant is required)
+DB_CONNECT=$(src_query "SELECT has_database_privilege(current_user, current_database(), 'CONNECT');")
+SRC_USER=$(src_query "SELECT current_user;")
+if [ "$DB_CONNECT" = "t" ]; then
+    pass "DB connect privilege" "$SRC_USER"
+else
+    fail "DB connect privilege" "$SRC_USER lacks CONNECT — run: GRANT CONNECT ON DATABASE <db> TO $SRC_USER"
+fi
+
+# Per-schema: USAGE + SELECT on tables/sequences (pg_catalog only)
+SCHEMA_PERMS=$(src_query "SELECT n.nspname, has_schema_privilege(current_user, n.nspname, 'USAGE'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'r'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'r' AND NOT has_table_privilege(current_user, c.oid, 'SELECT')), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S' AND NOT has_sequence_privilege(current_user, c.oid, 'SELECT')) FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' ORDER BY n.nspname;")
+
+if [ -z "$SCHEMA_PERMS" ]; then
+    warn "Schema read permissions" "no non-system schemas found or query failed"
+else
+    while IFS='|' read -r schema usage_ok total_tables tables_missing total_seqs seqs_missing; do
+        [ -z "$schema" ] && continue
+        label="Read perms: $schema"
+        if [ "$usage_ok" = "f" ]; then
+            fail "$label" "no USAGE on schema — run: GRANT USAGE ON SCHEMA $schema TO $SRC_USER"
+        elif [ "${tables_missing:-0}" -gt 0 ] && [ "${seqs_missing:-0}" -gt 0 ]; then
+            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables, ${seqs_missing}/${total_seqs} sequences"
+        elif [ "${tables_missing:-0}" -gt 0 ]; then
+            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables — run: GRANT SELECT ON ALL TABLES IN SCHEMA $schema TO $SRC_USER"
+        elif [ "${seqs_missing:-0}" -gt 0 ]; then
+            fail "$label" "missing SELECT on ${seqs_missing}/${total_seqs} sequences — run: GRANT SELECT ON ALL SEQUENCES IN SCHEMA $schema TO $SRC_USER"
+        else
+            pass "$label" "USAGE + SELECT on ${total_tables} tables, ${total_seqs} sequences"
+        fi
+    done <<< "$SCHEMA_PERMS"
+fi
+
 # ── TARGET DATABASE ────────────────────────────────────────────────
 echo ""
 echo "  TARGET DATABASE"
 echo "  ────────────────────────────────────────────────────────────────"
 
-# 10. Connectivity
+# 11. Connectivity
 TGT_VER=$(tgt_query "SHOW server_version;")
 if [ -n "$TGT_VER" ]; then
     pass "Connectivity" "PostgreSQL $TGT_VER"
@@ -199,7 +232,7 @@ else
 fi
 
 if [ -n "$TGT_VER" ]; then
-    # 11. Replication permission on target
+    # 12. Replication permission on target
     TGT_REPL=$(tgt_query "SELECT rolreplication FROM pg_roles WHERE rolname = current_user;")
     if [ "$TGT_REPL" = "t" ]; then
         pass "Replication permission" "role has REPLICATION attribute"
@@ -207,7 +240,7 @@ if [ -n "$TGT_VER" ]; then
         fail "Replication permission" "no REPLICATION attribute (needed for replication origin)"
     fi
 
-    # 12. Existing pgcopydb schema
+    # 13. Existing pgcopydb schema
     PGCOPYDB_SCHEMA=$(tgt_query "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'pgcopydb';")
     if [ -n "$PGCOPYDB_SCHEMA" ]; then
         warn "Existing pgcopydb schema" "pgcopydb schema exists (leftover?)"
@@ -221,14 +254,14 @@ echo ""
 echo "  MIGRATION INSTANCE"
 echo "  ────────────────────────────────────────────────────────────────"
 
-# 13. filters.ini
+# 14. filters.ini
 if [ -f ~/filters.ini ]; then
     pass "filters.ini" "~/filters.ini found"
 else
     fail "filters.ini" "~/filters.ini not found"
 fi
 
-# 14. pgcopydb binary
+# 15. pgcopydb binary
 PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || echo "")
 if [ -z "$PGCOPYDB_BIN" ] && [ -x /usr/lib/postgresql/17/bin/pgcopydb ]; then
     PGCOPYDB_BIN="/usr/lib/postgresql/17/bin/pgcopydb"
