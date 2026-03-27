@@ -141,6 +141,14 @@ Once the initial copy completes and CDC is streaming, check replication progress
 
 When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 MB), you are ready for cutover.
 
+To receive proactive Slack alerts on failures and errors without manually running the above scripts, use `notify-migration.sh`. It runs from cron and fires once per unique event (process stopped, new errors, completion). Add `SLACK_WEBHOOK_URL` to `~/.env`, then:
+
+```bash
+~/notify-migration.sh --test                  # verify webhook
+~/notify-migration.sh --setup                 # install cron job (default: every 2 min)
+~/notify-migration.sh --uninstall             # remove when done
+```
+
 ### 4. Cut Over
 
 1. **Stop writes** to the source database (maintenance mode, read-only, connection drain, etc.).
@@ -349,6 +357,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `compare-pg-params.sh` | Prepare | Compare PostgreSQL parameters between source and target |
 | `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots) |
 | `fix-replica-identity.sh` | Prepare | Set REPLICA IDENTITY FULL on tables without primary keys |
+| `notify-migration.sh` | Prepare / Monitor | Slack alerts for failures and errors via cron (run `--setup` before migrating) |
 | `filters.ini` | Prepare | pgcopydb filter configuration |
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
 | `start-migration-screen.sh` | Migrate | Run the migration in a screen session |
