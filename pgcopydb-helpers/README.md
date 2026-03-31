@@ -215,7 +215,14 @@ If pgcopydb crashes, the instance reboots, or the migration is interrupted:
 ~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS  # or specify explicitly
 ```
 
-This backs up the SQLite catalog before resuming. It uses `--not-consistent` to allow resuming from a mid-transaction state, and intentionally omits `--split-tables-larger-than` because pgcopydb truncates the entire table before checking split parts on resume, which causes data loss.
+This backs up the SQLite catalog before resuming and uses `--not-consistent` to allow resuming from a mid-transaction state.
+
+**Choosing between `--resume` and `--restart`:**
+
+- **COPY already completed** (failure was during indexes, post-data restore, or CDC): Use `--resume`. If the original migration used `--split-tables-larger-than`, pass the same value — the COPY phase is skipped entirely so there is no truncation risk.
+- **COPY was still in progress** when the failure occurred: Use `--restart` (full restart) instead. pgcopydb truncates split tables before re-queuing parts on resume, which loses data from already-copied partitions.
+
+To check whether COPY completed, run `~/check-migration-status.sh` and look at the copy task progress. If all COPY tasks show as completed with no outstanding jobs, it is safe to `--resume`.
 
 To start completely over, wipe the target and clean up replication:
 
@@ -392,7 +399,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 
 ## Critical Warnings
 
-- **Never use `--split-tables-larger-than` with `--resume`** — pgcopydb truncates the entire table before checking parts, causing data loss.
+- **If COPY failed mid-flight, use `--restart` instead of `--resume`** — pgcopydb truncates split tables before re-queuing parts on resume, causing data loss for partially-copied tables. If COPY completed and the failure was in a later phase (indexes, CDC), `--resume` with the same `--split-tables-larger-than` value is safe.
 - **Never use `pgcopydb --restart`** without backing up first — it wipes the CDC directory AND SQLite catalogs.
 - **Always clean up replication slots** when done — unconsumed slots cause unbounded WAL growth on the source.
 - **Verify extension filtering after STEP 1** — if `s_depend` count is 0, extension-owned objects won't be excluded.
