@@ -195,7 +195,29 @@ When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 M
 
 6. **Switch** your application to the PlanetScale target.
 
-### 5. Clean Up
+### 5. Post-Migration (Optional)
+
+These steps are optional and can be run after the migration is complete and traffic has been switched.
+
+**Compare bloat reduction** between source and target to see how much space was reclaimed by the fresh copy. This breaks down heap, TOAST, and index sizes per table and reports overall reduction:
+
+```bash
+~/compare-bloat.sh                    # tables > 100 MB (default)
+~/compare-bloat.sh --min-size-mb 500  # only tables > 500 MB
+```
+
+The script uses catalog queries only — no table scans, no writes, no locks — and is safe to run against production databases.
+
+**Verify migration data** by comparing schema, row counts, sequences, and data spot-checks between source and target. Safe for multi-TB databases — uses catalog statistics and index seeks instead of full table scans:
+
+```bash
+~/verify_migration.sh
+~/verify_migration.sh --row-count-tolerance 1 --exact-count-tables 20
+```
+
+The script runs 12 checks and reports PASS/WARN/FAIL for each. Run it multiple times for higher confidence — exact-count tables are chosen randomly, so repeated runs cover more of the database. See `verify_migration.sh --help` for all options.
+
+### 6. Clean Up
 
 After the migration is complete (or abandoned), clean up replication artifacts:
 
@@ -389,6 +411,8 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
 | `drop-replication-slots.sh` | Cleanup | Remove replication slots and origins |
 | `stop_cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
+| `compare-bloat.sh` | Post-migration | Compare heap, TOAST, and index bloat between source and target |
+| `verify_migration.sh` | Post-migration | Verify schema, row counts, sequences, and data between source and target |
 
 ## Critical Warnings
 

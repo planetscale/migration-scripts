@@ -320,6 +320,38 @@ psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
 
 ---
 
+### Post-Migration
+
+#### `compare-bloat.sh`
+
+Compares database bloat between source and target by breaking down table heap, TOAST, and index sizes. Uses only catalog queries — no table scans, no writes, no locks, safe for production. Outputs per-table and per-index size comparisons with reduction percentages, plus an overall bloat reduction summary.
+
+```bash
+~/compare-bloat.sh
+~/compare-bloat.sh --min-size-mb 500 --top-indexes 30
+```
+
+**Output includes:**
+- Database overview with total size comparison
+- Per-table breakdown of heap, TOAST, and index sizes with reduction percentages
+- Top N indexes ranked by absolute size reduction
+- Summary table with component-level and total bloat reduction
+
+**Options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--min-size-mb <N>` | 100 | Only include tables larger than N MB on the source |
+| `--top-indexes <N>` | 20 | Number of indexes to show in the top-indexes-by-reduction section |
+
+**When to use:** After the migration is complete, to quantify how much bloat was eliminated by the fresh copy.
+
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
+
+**Read-only** — makes no modifications to either database.
+
+---
+
 ## Troubleshooting with the Migration Log
 
 The migration log (`~/migration_*/migration.log`) is the single most valuable troubleshooting artifact. It contains the full pgcopydb output including:
