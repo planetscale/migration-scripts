@@ -35,6 +35,49 @@ Compares performance-relevant PostgreSQL parameters between source and target da
 
 ---
 
+#### `verify_migration.sh`
+
+Verifies that all data was copied correctly from source to target after a migration. Runs 12 checks covering schema, row counts, table sizes, sequences, and data spot-checks — without full table scans. Safe for multi-TB databases; typically completes in under 2 minutes.
+
+```bash
+~/verify_migration.sh
+~/verify_migration.sh --row-count-tolerance 1 --exact-count-tables 20
+```
+
+**Checks performed:**
+- **Schema:** tables, columns (type/nullable/default), indexes, constraints (PK/FK/UNIQUE/CHECK), views, functions/procedures
+- **Row counts:** fast estimates via `pg_class.reltuples` (no table scan), with configurable % tolerance
+- **Sizes:** total DB size and top 15 tables with size comparison
+- **Sequences:** presence and `last_value` comparison
+- **Data spot-check:** `MIN`/`MAX` on PK columns of the largest tables (index seeks only — no scan)
+- **Exact row counts:** random sample of up to 10 tables ≤ 10 GB with real `COUNT(*)` and per-table timeout
+- **Extensions:** presence and version match
+
+**Options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--row-count-tolerance <pct>` | 5 | Allowed % difference for `pg_class` row estimates |
+| `--size-tolerance <pct>` | 15 | Allowed % size difference before warning |
+| `--spot-check-tables <n>` | 20 | Number of tables for MIN/MAX spot-check |
+| `--no-spot-check` | — | Skip MIN/MAX spot-check entirely |
+| `--schemas <s1,s2,...>` | all | Restrict checks to specific schemas |
+| `--exact-count-tables <n>` | 10 | Tables to exact-count (0 = skip) |
+| `--exact-count-max-gb <n>` | 10 | Max table size in GB for exact count |
+| `--exact-count-timeout <s>` | 120 | Per-table `COUNT(*)` timeout in seconds |
+
+**When to use:** After `pgcopydb` finishes the initial COPY phase and before enabling CDC or cutting over. Run it multiple times — exact-count tables are chosen randomly, so repeated runs cover more tables.
+
+**Interpreting row count mismatches:** `pg_class.reltuples` estimates are only refreshed by `ANALYZE`. Run `ANALYZE` on both DBs before running this script for the most accurate estimates. If target shows _more_ rows than source for some tables, the stats are stale — not a data problem.
+
+**Exit codes:** `0` = all checks passed, `1` = warnings only, `2` = one or more failures.
+
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
+
+**Read-only** — makes no modifications to either database.
+
+---
+
 #### `preflight-check.sh`
 
 Validates all migration prerequisites before starting `pgcopydb clone --follow`. Checks source, target, and migration instance, reporting PASS/WARN/FAIL for each item.
