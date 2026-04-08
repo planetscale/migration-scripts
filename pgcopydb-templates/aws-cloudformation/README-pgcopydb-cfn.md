@@ -20,7 +20,7 @@ at boot.
 
 ### Prerequisites
 - VPC ID and a subnet ID where the instance should run
-- The source or restored database must be accessible from this subnet
+- The source database must be network-accessible from this subnet
 
 ### Steps
 
@@ -42,4 +42,4 @@ aws cloudformation delete-stack --stack-name YOUR_STACK_NAME
 
 ## Questions?
 
-Contact your PlanetScale migration team representative.
+Visit [PlanetScale documentation](https://planetscale.com/docs) for more information.

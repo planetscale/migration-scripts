@@ -55,4 +55,4 @@ terraform destroy \
 
 ## Questions?
 
-Contact your PlanetScale migration team representative.
+Visit [PlanetScale documentation](https://planetscale.com/docs) for more information.

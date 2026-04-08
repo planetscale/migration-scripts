@@ -21,7 +21,7 @@ at boot.
 ### Prerequisites
 - [Terraform](https://developer.hashicorp.com/terraform/install) installed (v1.0+)
 - VPC ID and a subnet ID
-- `gcloud` or AWS CLI authenticated
+- AWS CLI configured (`aws configure` or environment variables)
 
 ### Steps
 
@@ -52,4 +52,4 @@ terraform destroy \
 
 ## Questions?
 
-Contact your PlanetScale migration team representative.
+Visit [PlanetScale documentation](https://planetscale.com/docs) for more information.

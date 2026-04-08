@@ -37,14 +37,14 @@ Metadata:
         default: "EC2 Key Pair (Optional)"
   Generated:
     Tool: 'PlanetScale Liftoff Migration Reviewer'
-    Date: '2026-04-08T17:43:00.349Z'
+    Date: '2026-04-08T18:55:55.078Z'
     Purpose: 'pgcopydb EC2 instance for PostgreSQL to PlanetScale migrations'
 
 Parameters:
   ResourcePrefix:
     Type: String
     Default: 'planetscale-migration'
-    Description: 'Prefix for all resource names (must match IAM role restriction)'
+    Description: 'Prefix for all resource names'
     AllowedPattern: '[a-z0-9-]+'
     ConstraintDescription: 'Must be lowercase alphanumeric with hyphens only'
 
