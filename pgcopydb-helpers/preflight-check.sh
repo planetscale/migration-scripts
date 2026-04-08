@@ -261,15 +261,34 @@ else
     fail "filters.ini" "~/filters.ini not found"
 fi
 
-# 15. pgcopydb binary
+# 15. pgcopydb binary + PG client vs target version
 PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || echo "")
-if [ -z "$PGCOPYDB_BIN" ] && [ -x /usr/lib/postgresql/17/bin/pgcopydb ]; then
-    PGCOPYDB_BIN="/usr/lib/postgresql/17/bin/pgcopydb"
+if [ -z "$PGCOPYDB_BIN" ]; then
+    for pg_bin_dir in $(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -t/ -k5 -Vr); do
+        if [ -x "$pg_bin_dir/pgcopydb" ]; then
+            PGCOPYDB_BIN="$pg_bin_dir/pgcopydb"
+            break
+        fi
+    done
 fi
-if [ -n "$PGCOPYDB_BIN" ]; then
-    pass "pgcopydb binary" "$PGCOPYDB_BIN"
+
+if [ -z "$PGCOPYDB_BIN" ]; then
+    fail "pgcopydb binary" "not found on PATH or in any /usr/lib/postgresql/*/bin/"
 else
-    fail "pgcopydb binary" "not found on PATH or /usr/lib/postgresql/17/bin/"
+    # Derive PG major version from the install path (/usr/lib/postgresql/NN/bin/pgcopydb)
+    PGCOPYDB_PG_MAJOR=$(echo "$PGCOPYDB_BIN" | grep -oE '/postgresql/[0-9]+/' | grep -oE '[0-9]+')
+    TGT_PG_MAJOR=$(tgt_query "SELECT current_setting('server_version_num')::int / 10000")
+    PGCOPYDB_VERSION=$("$PGCOPYDB_BIN" --version 2>/dev/null | head -1 || echo "unknown")
+
+    if [ -z "$PGCOPYDB_PG_MAJOR" ]; then
+        warn "pgcopydb binary" "$PGCOPYDB_BIN ($PGCOPYDB_VERSION) — could not determine PG client version from path"
+    elif [ -z "$TGT_PG_MAJOR" ]; then
+        warn "pgcopydb binary" "$PGCOPYDB_BIN ($PGCOPYDB_VERSION, PG${PGCOPYDB_PG_MAJOR}) — could not query target PG version"
+    elif [ "$PGCOPYDB_PG_MAJOR" -eq "$TGT_PG_MAJOR" ]; then
+        pass "pgcopydb binary" "$PGCOPYDB_BIN ($PGCOPYDB_VERSION, PG${PGCOPYDB_PG_MAJOR} matches target PG${TGT_PG_MAJOR})"
+    else
+        fail "pgcopydb binary" "PG client is PG${PGCOPYDB_PG_MAJOR} but target is PG${TGT_PG_MAJOR} — must match target version"
+    fi
 fi
 
 # ── Summary ────────────────────────────────────────────────────────
