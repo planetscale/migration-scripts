@@ -19,9 +19,8 @@ at boot.
 ## How to Deploy
 
 ### Prerequisites
-- The IAM role from Step 1 must be deployed first
 - VPC ID and a subnet ID where the instance should run
-- The restored database from Step 3 must be accessible from this subnet
+- The source or restored database must be accessible from this subnet
 
 ### Steps
 

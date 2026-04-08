@@ -37,7 +37,7 @@ Metadata:
         default: "EC2 Key Pair (Optional)"
   Generated:
     Tool: 'PlanetScale Liftoff Migration Reviewer'
-    Date: '2026-04-06T19:28:48.774Z'
+    Date: '2026-04-08T17:43:00.349Z'
     Purpose: 'pgcopydb EC2 instance for PostgreSQL to PlanetScale migrations'
 
 Parameters:
