@@ -6,7 +6,7 @@
 # for PostgreSQL-to-PlanetScale migrations.
 #
 # Usage:
-#   1. Save this file as main.tf and the user-data script as user-data.sh
+#   1. Save this file (pgcopydb-migration-instance.tf) and user-data.sh in the same directory
 #   2. Run: terraform init
 #   3. Run: terraform plan -var="vpc_id=vpc-xxx" -var="subnet_id=subnet-xxx"
 #   4. Run: terraform apply -var="vpc_id=vpc-xxx" -var="subnet_id=subnet-xxx"

@@ -117,6 +117,8 @@ rm -rf /tmp/migration-scripts
 chown ubuntu:ubuntu /home/ubuntu/*.sh /home/ubuntu/*.md
 chmod +x /home/ubuntu/*.sh
 
+mkdir -p /var/lib/pgcopydb && chmod 755 /var/lib/pgcopydb
+
 echo ""
 echo "=========================================="
 echo "Setup completed successfully!"

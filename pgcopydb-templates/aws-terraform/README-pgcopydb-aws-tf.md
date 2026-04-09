@@ -3,7 +3,7 @@
 ## What This Does
 
 This Terraform template creates an EC2 instance pre-configured with
-[pgcopydb](https://pgcopydb.readthedocs.io/), the tool PlanetScale uses to migrate
+[pgcopydb](https://github.com/planetscale/pgcopydb), the tool PlanetScale uses to migrate
 your PostgreSQL data. The instance runs Ubuntu 24.04 and pulls the latest
 [PlanetScale migration helper scripts](https://github.com/planetscale/migration-scripts)
 at boot.
@@ -40,6 +40,7 @@ at boot.
    ```bash
    aws ssm start-session --target $(terraform output -raw instance_id)
    ```
+   Or via EC2 Instance Connect (browser-based SSH, no key needed — open the instance in the EC2 console and click **Connect**).
 
 ## How to Tear Down
 
