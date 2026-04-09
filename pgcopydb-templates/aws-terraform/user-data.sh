@@ -136,10 +136,8 @@ chown ubuntu:ubuntu /home/ubuntu/*.sh /home/ubuntu/*.md
 chmod +x /home/ubuntu/*.sh
 
 # =============================================================================
-# Create Directories & Verify
+# Verify Installation
 # =============================================================================
-mkdir -p /var/lib/pgcopydb && chmod 755 /var/lib/pgcopydb
-
 echo "=== Installation verification ===" >> /var/log/user-data-verification.log
 export PATH=/usr/lib/postgresql/17/bin:$PATH
 pgcopydb --version >> /var/log/user-data-verification.log 2>&1 || echo "pgcopydb installation failed" >> /var/log/user-data-verification.log

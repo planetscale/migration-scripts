@@ -37,7 +37,7 @@ Metadata:
         default: "EC2 Key Pair (Optional)"
   Generated:
     Tool: 'PlanetScale Liftoff Migration Reviewer'
-    Date: '2026-04-08T18:55:55.078Z'
+    Date: '2026-04-09T16:34:08.020Z'
     Purpose: 'pgcopydb EC2 instance for PostgreSQL to PlanetScale migrations'
 
 Parameters:
@@ -313,10 +313,6 @@ Resources:
                 chmod +x /home/ubuntu/*.sh
             01_apply_sysctl:
               command: sysctl -p /etc/sysctl.d/99-pgcopydb.conf
-        create_directories:
-          commands:
-            01_create_pgcopydb_dir:
-              command: mkdir -p /var/lib/pgcopydb && chmod 755 /var/lib/pgcopydb
         verify_installation:
           commands:
             01_log_versions:
