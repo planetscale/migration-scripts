@@ -43,6 +43,7 @@ at boot.
      --project=YOUR_PROJECT \
      --tunnel-through-iap
    ```
+   Or via the GCP Console (browser-based SSH — open the instance in Compute Engine and click **SSH**).
 
 ## How to Tear Down
 
