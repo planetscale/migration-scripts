@@ -201,9 +201,9 @@ Resumes a previously interrupted `pgcopydb clone --follow` migration. Backs up t
 ~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS  # specify explicitly
 ```
 
-**Important:** If the original migration used `--split-tables-larger-than`, the resume script passes the same value. This is safe when COPY has already completed (the COPY supervisor doesn't run, so no truncation occurs). If COPY was still in progress when the failure happened, use `--restart` instead — pgcopydb truncates split tables before re-queuing parts on resume, which loses already-copied partitions. Run `~/check-migration-status.sh` to determine whether COPY completed before deciding.
+**Important:** The script passes `--split-tables-larger-than` to match `run-migration.sh`. pgcopydb requires catalog consistency — if the original run used split tables, the resume must pass the same value.
 
-**When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted during indexes, post-data restore, or CDC. If COPY failed mid-flight, use `~/target-clean.sh` + `~/drop-replication-slots.sh` + `~/start-migration-screen.sh` to start fresh instead.
+**When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. Do NOT use after a successful migration — use `run-migration.sh` to start fresh.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, existing migration directory
 
@@ -400,7 +400,7 @@ All scripts use variables at the top that can be adjusted per migration. See [Cl
 
 ## Critical Warnings
 
-- **If COPY failed mid-flight, use `--restart` instead of `--resume`** — pgcopydb truncates split tables before re-queuing parts on resume, causing data loss for partially-copied tables. If COPY completed and the failure was in a later phase (indexes, CDC), `--resume` with the same `--split-tables-larger-than` value is safe. Run `~/check-migration-status.sh` to check.
+- **Resume and restart are different** — `--resume` skips completed work; `--restart` wipes progress and starts over. The resume script uses `--resume`.
 - **Never use `pgcopydb --restart`** without backing up first — it wipes the CDC directory AND SQLite catalogs.
 - **Always clean up replication slots** after a migration — unconsumed slots cause WAL accumulation on the source.
 - **Verify extension filtering after STEP 1** — check `SELECT COUNT(*) FROM s_depend;` in `filter.db`. If it's 0, extension-owned objects in `public` won't be filtered.
