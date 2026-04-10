@@ -392,7 +392,6 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 
 ## Critical Warnings
 
-- **Resume and restart are different** — `--resume` skips completed work; `--restart` wipes progress and starts over. The resume script uses `--resume`.
-- **Never use `pgcopydb --restart`** without backing up first — it wipes the CDC directory AND SQLite catalogs.
+- **Do not use `pgcopydb --restart`** — it wipes the CDC directory and SQLite catalogs without cleaning the target database or correcting previous failures. To start over, use `~/target-clean.sh` + `~/drop-replication-slots.sh` + `~/start-migration-screen.sh` instead.
 - **Always clean up replication slots** when done — unconsumed slots cause unbounded WAL growth on the source.
 - **Verify extension filtering after STEP 1** — if `s_depend` count is 0, extension-owned objects won't be excluded.

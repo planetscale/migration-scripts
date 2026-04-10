@@ -203,7 +203,7 @@ Resumes a previously interrupted `pgcopydb clone --follow` migration. Backs up t
 
 **Important:** The script passes `--split-tables-larger-than` to match `run-migration.sh`. pgcopydb requires catalog consistency — if the original run used split tables, the resume must pass the same value.
 
-**When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. Do NOT use after a successful migration — use `run-migration.sh` to start fresh.
+**When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. To start completely over instead, run `~/target-clean.sh` + `~/drop-replication-slots.sh` first, then `~/start-migration-screen.sh`.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, existing migration directory
 
@@ -400,8 +400,7 @@ All scripts use variables at the top that can be adjusted per migration. See [Cl
 
 ## Critical Warnings
 
-- **Resume and restart are different** — `--resume` skips completed work; `--restart` wipes progress and starts over. The resume script uses `--resume`.
-- **Never use `pgcopydb --restart`** without backing up first — it wipes the CDC directory AND SQLite catalogs.
+- **Do not use `pgcopydb --restart`** — it wipes the CDC directory and SQLite catalogs without cleaning the target database or correcting previous failures. To start over, use `~/target-clean.sh` + `~/drop-replication-slots.sh` + `~/start-migration-screen.sh` instead.
 - **Always clean up replication slots** after a migration — unconsumed slots cause WAL accumulation on the source.
 - **Verify extension filtering after STEP 1** — check `SELECT COUNT(*) FROM s_depend;` in `filter.db`. If it's 0, extension-owned objects in `public` won't be filtered.
 - **pg_restore error tolerance** — pgcopydb allows up to 10 restore errors by default. If your migration has more, you may need a custom build with a higher `MAX_TOLERATED_RESTORE_ERRORS`.
