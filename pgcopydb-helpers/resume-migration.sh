@@ -27,11 +27,7 @@ fi
 # --- loaded ---
 
 # Find the most recent migration directory, or set explicitly
-if [ -n "${1:-}" ]; then
-    MIGRATION_DIR="$1"
-else
-    MIGRATION_DIR=$(ls -dt ~/migration_* 2>/dev/null | head -1)
-fi
+MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 
 if [ -z "$MIGRATION_DIR" ] || [ ! -d "$MIGRATION_DIR" ]; then
     echo "ERROR: No migration directory found. Pass the path as an argument:"

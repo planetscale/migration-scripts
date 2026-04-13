@@ -33,11 +33,7 @@ fi
 ENDPOS_LSN="$1"
 
 # Find the most recent migration directory
-if [ -n "${2:-}" ]; then
-    MIGRATION_DIR="$2"
-else
-    MIGRATION_DIR=$(ls -dt ~/migration_* 2>/dev/null | head -1)
-fi
+MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 
 if [ -z "$MIGRATION_DIR" ] || [ ! -d "$MIGRATION_DIR" ]; then
     echo "ERROR: No migration directory found. Pass the path as second argument:"

@@ -27,7 +27,7 @@ source ~/.env
 set +a
 set -u
 
-MIGRATION_DIR=$(ls -dt ~/migration_* 2>/dev/null | head -1)
+MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 if [ -z "$MIGRATION_DIR" ]; then
     echo -e "${RED}✗ No migration directory found${NC}"
     exit 1
