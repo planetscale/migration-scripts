@@ -215,7 +215,7 @@ If pgcopydb crashes, the instance reboots, or the migration is interrupted:
 ~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS  # or specify explicitly
 ```
 
-This backs up the SQLite catalog before resuming. It uses `--not-consistent` to allow resuming from a mid-transaction state, and intentionally omits `--split-tables-larger-than` because pgcopydb truncates the entire table before checking split parts on resume, which causes data loss.
+This backs up the SQLite catalog before resuming and uses `--not-consistent` to allow resuming from a mid-transaction state. The script passes `--split-tables-larger-than` to match `run-migration.sh` — pgcopydb requires catalog consistency, so the resume must use the same split value as the original run.
 
 To start completely over, wipe the target and clean up replication:
 
@@ -392,7 +392,6 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 
 ## Critical Warnings
 
-- **Never use `--split-tables-larger-than` with `--resume`** — pgcopydb truncates the entire table before checking parts, causing data loss.
-- **Never use `pgcopydb --restart`** without backing up first — it wipes the CDC directory AND SQLite catalogs.
+- **Do not use `pgcopydb --restart`** — it wipes the CDC directory and SQLite catalogs without cleaning the target database or correcting previous failures. To start over, use `~/target-clean.sh` + `~/drop-replication-slots.sh` + `~/start-migration-screen.sh` instead.
 - **Always clean up replication slots** when done — unconsumed slots cause unbounded WAL growth on the source.
 - **Verify extension filtering after STEP 1** — if `s_depend` count is 0, extension-owned objects won't be excluded.

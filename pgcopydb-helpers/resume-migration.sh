@@ -5,8 +5,11 @@
 #
 # Resumes a previously interrupted pgcopydb clone --follow migration.
 # If no directory is given, uses the most recent ~/migration_* directory.
-# Backs up the SQLite catalog before resuming. Does NOT use
-# --split-tables-larger-than (unsafe with --resume).
+# Backs up the SQLite catalog before resuming.
+#
+# Uses --split-tables-larger-than to match run-migration.sh. pgcopydb
+# requires catalog consistency — if the original run used split tables,
+# the resume must pass the same value.
 #
 set -eo pipefail
 
@@ -57,8 +60,6 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
     echo "Migration dir: $MIGRATION_DIR"
     echo "=========================================="
 
-    # NOTE: Do NOT use --split-tables-larger-than with --resume.
-    # pgcopydb truncates the entire table before checking parts, causing data loss.
     /usr/lib/postgresql/17/bin/pgcopydb clone \
         --follow \
         --plugin wal2json \
@@ -73,6 +74,8 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
         --skip-db-properties \
         --table-jobs "$TABLE_JOBS" \
         --index-jobs "$INDEX_JOBS" \
+        --split-tables-larger-than 50GB \
+        --split-max-parts "$TABLE_JOBS" \
         --dir "$MIGRATION_DIR"
 
     EXIT_CODE=$?

@@ -244,9 +244,9 @@ Resumes a previously interrupted `pgcopydb clone --follow` migration. Backs up t
 ~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS  # specify explicitly
 ```
 
-**Important:** This script intentionally does NOT use `--split-tables-larger-than` with `--resume`. pgcopydb truncates the entire table before checking split parts on resume, which causes data loss.
+**Important:** The script passes `--split-tables-larger-than` to match `run-migration.sh`. pgcopydb requires catalog consistency — if the original run used split tables, the resume must pass the same value.
 
-**When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. Do NOT use after a successful migration — use `run-migration.sh` to start fresh.
+**When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. To start completely over instead, run `~/target-clean.sh` + `~/drop-replication-slots.sh` first, then `~/start-migration-screen.sh`.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, existing migration directory
 
@@ -439,12 +439,11 @@ All scripts use variables at the top that can be adjusted per migration. See [Cl
 | `TABLE_JOBS` | 16 | run-migration.sh, resume-migration.sh |
 | `INDEX_JOBS` | 12 | run-migration.sh, resume-migration.sh |
 | `FILTER_FILE` | ~/filters.ini | run-migration.sh, resume-migration.sh |
-| `--split-tables-larger-than` | 50GB | run-migration.sh only (not resume) |
+| `--split-tables-larger-than` | 50GB | run-migration.sh, resume-migration.sh |
 
 ## Critical Warnings
 
-- **Never use `--split-tables-larger-than` with `--resume`** — pgcopydb truncates the entire table before checking parts, causing data loss.
-- **Never use `pgcopydb --restart`** without backing up first — it wipes the CDC directory AND SQLite catalogs.
+- **Do not use `pgcopydb --restart`** — it wipes the CDC directory and SQLite catalogs without cleaning the target database or correcting previous failures. To start over, use `~/target-clean.sh` + `~/drop-replication-slots.sh` + `~/start-migration-screen.sh` instead.
 - **Always clean up replication slots** after a migration — unconsumed slots cause WAL accumulation on the source.
 - **Verify extension filtering after STEP 1** — check `SELECT COUNT(*) FROM s_depend;` in `filter.db`. If it's 0, extension-owned objects in `public` won't be filtered.
 - **pg_restore error tolerance** — pgcopydb allows up to 10 restore errors by default. If your migration has more, you may need a custom build with a higher `MAX_TOLERATED_RESTORE_ERRORS`.
