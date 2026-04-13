@@ -2,10 +2,12 @@
 
 # Usage: ~/stop_cdc.sh <LSN>
 # Example: ~/stop_cdc.sh 41EBA/7C7A1AD8
+# Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop_cdc.sh 41EBA/7C7A1AD8
 #
 # Sets the CDC endpos sentinel so pgcopydb stops streaming
-# after reaching the given LSN. Use the sqlite3 method (more
-# reliable than the pgcopydb CLI sentinel command).
+# after reaching the given LSN. Uses MIGRATION_DIR env var if set,
+# otherwise the most recent ~/migration_*/ directory.
+# Use the sqlite3 method (more reliable than the pgcopydb CLI sentinel command).
 
 
 # --- Load environment ---
