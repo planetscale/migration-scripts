@@ -186,7 +186,7 @@ When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 M
 
    ```bash
    ~/stop_cdc.sh <LSN>
-   ~/stop_cdc.sh <LSN> ~/migration_YYYYMMDD-HHMMSS  # explicit dir
+   MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop_cdc.sh <LSN>  # explicit dir
    ```
 
 4. **Wait** for pgcopydb to apply all remaining changes and exit. Monitor with `check-cdc-status.sh`.
@@ -211,8 +211,8 @@ This drops the replication slot on the source, the replication origin on the tar
 If pgcopydb crashes, the instance reboots, or the migration is interrupted:
 
 ```bash
-~/resume-migration.sh                              # uses most recent migration dir
-~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS  # or specify explicitly
+~/resume-migration.sh                                                        # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh              # or specify explicitly
 ```
 
 This backs up the SQLite catalog before resuming and uses `--not-consistent` to allow resuming from a mid-transaction state. The script passes `--split-tables-larger-than` to match `run-migration.sh` — pgcopydb requires catalog consistency, so the resume must use the same split value as the original run.

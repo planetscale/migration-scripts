@@ -240,8 +240,8 @@ Displays CDC-specific replication progress: apply and streaming LSN positions, b
 Resumes a previously interrupted `pgcopydb clone --follow` migration. Backs up the SQLite catalog before resuming.
 
 ```bash
-~/resume-migration.sh                          # uses most recent migration dir
-~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS  # specify explicitly
+~/resume-migration.sh                                                    # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh          # specify explicitly
 ```
 
 **Important:** The script passes `--split-tables-larger-than` to match `run-migration.sh`. pgcopydb requires catalog consistency — if the original run used split tables, the resume must pass the same value.
@@ -303,7 +303,7 @@ psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
 
 # Set the endpoint
 ~/stop_cdc.sh 41EBA/7C7A1AD8
-~/stop_cdc.sh 41EBA/7C7A1AD8 ~/migration_YYYYMMDD-HHMMSS  # explicit dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop_cdc.sh 41EBA/7C7A1AD8  # explicit dir
 ```
 
 **Cutover procedure:**

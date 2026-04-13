@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# Usage: ~/resume-migration.sh [migration_dir]
-# Example: ~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS
+# Usage: ~/resume-migration.sh
+# Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh
 #
 # Resumes a previously interrupted pgcopydb clone --follow migration.
-# If no directory is given, uses the most recent ~/migration_* directory.
+# Uses MIGRATION_DIR env var if set, otherwise the most recent ~/migration_*/ directory.
 # Backs up the SQLite catalog before resuming.
 #
 # Uses --split-tables-larger-than to match run-migration.sh. pgcopydb
@@ -27,11 +27,7 @@ fi
 # --- loaded ---
 
 # Find the most recent migration directory, or set explicitly
-if [ -n "${1:-}" ]; then
-    MIGRATION_DIR="$1"
-else
-    MIGRATION_DIR=$(ls -dt ~/migration_* 2>/dev/null | head -1)
-fi
+MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 
 if [ -z "$MIGRATION_DIR" ] || [ ! -d "$MIGRATION_DIR" ]; then
     echo "ERROR: No migration directory found. Pass the path as an argument:"
