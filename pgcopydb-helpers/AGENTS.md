@@ -35,19 +35,18 @@ Compares performance-relevant PostgreSQL parameters between source and target da
 
 ---
 
-#### `verify_migration.sh`
+#### `verify-migration.sh`
 
-Verifies that all data was copied correctly from source to target after a migration. Runs 12 checks covering schema, row counts, table sizes, sequences, and data spot-checks — without full table scans. Safe for multi-TB databases; typically completes in under 2 minutes.
+Verifies that all data was copied correctly from source to target after a migration. Runs 11 checks covering schema, row counts, sequences, and data spot-checks — without full table scans. Safe for multi-TB databases; typically completes in under 2 minutes.
 
 ```bash
-~/verify_migration.sh
-~/verify_migration.sh --row-count-tolerance 1 --exact-count-tables 20
+~/verify-migration.sh
+~/verify-migration.sh --row-count-tolerance 1 --exact-count-tables 20
 ```
 
 **Checks performed:**
 - **Schema:** tables, columns (type/nullable/default), indexes, constraints (PK/FK/UNIQUE/CHECK), views, functions/procedures
 - **Row counts:** fast estimates via `pg_class.reltuples` (no table scan), with configurable % tolerance
-- **Sizes:** total DB size and top 15 tables with size comparison
 - **Sequences:** presence and `last_value` comparison
 - **Data spot-check:** `MIN`/`MAX` on PK columns of the largest tables (index seeks only — no scan)
 - **Exact row counts:** random sample of up to 10 tables ≤ 10 GB with real `COUNT(*)` and per-table timeout
@@ -58,7 +57,6 @@ Verifies that all data was copied correctly from source to target after a migrat
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--row-count-tolerance <pct>` | 5 | Allowed % difference for `pg_class` row estimates |
-| `--size-tolerance <pct>` | 15 | Allowed % size difference before warning |
 | `--spot-check-tables <n>` | 20 | Number of tables for MIN/MAX spot-check |
 | `--no-spot-check` | — | Skip MIN/MAX spot-check entirely |
 | `--schemas <s1,s2,...>` | all | Restrict checks to specific schemas |

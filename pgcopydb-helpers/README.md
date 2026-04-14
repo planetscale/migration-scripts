@@ -191,7 +191,11 @@ When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 M
 
 4. **Wait** for pgcopydb to apply all remaining changes and exit. Monitor with `check-cdc-status.sh`.
 
-5. **Verify** data on the target.
+5. **Verify** data on the target using `verify-migration.sh`.
+
+   ```bash
+   ~/verify-migration.sh
+   ```
 
 6. **Switch** your application to the PlanetScale target.
 
