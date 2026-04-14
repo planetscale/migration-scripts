@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Usage: ~/stop_cdc.sh <LSN>
-# Example: ~/stop_cdc.sh 41EBA/7C7A1AD8
-# Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop_cdc.sh 41EBA/7C7A1AD8
+# Usage: ~/stop-cdc.sh <LSN>
+# Example: ~/stop-cdc.sh 41EBA/7C7A1AD8
+# Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh 41EBA/7C7A1AD8
 #
 # Sets the CDC endpos sentinel so pgcopydb stops streaming
 # after reaching the given LSN. Uses MIGRATION_DIR env var if set,

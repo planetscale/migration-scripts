@@ -185,8 +185,8 @@ When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 M
 3. **Set the CDC endpoint** so pgcopydb stops after reaching that position:
 
    ```bash
-   ~/stop_cdc.sh <LSN>
-   MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop_cdc.sh <LSN>  # explicit dir
+   ~/stop-cdc.sh <LSN>
+   MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh <LSN>  # explicit dir
    ```
 
 4. **Wait** for pgcopydb to apply all remaining changes and exit. Monitor with `check-cdc-status.sh`.
@@ -353,7 +353,7 @@ If `resume-migration.sh` was used, check `resume-*.log` files in the migration d
 
 ### SQLite Catalogs
 
-pgcopydb tracks all migration state in SQLite databases inside the migration directory. Several of the monitoring scripts (`check-migration-status.sh`, `check-cdc-status.sh`, `stop_cdc.sh`) read directly from these catalogs.
+pgcopydb tracks all migration state in SQLite databases inside the migration directory. Several of the monitoring scripts (`check-migration-status.sh`, `check-cdc-status.sh`, `stop-cdc.sh`) read directly from these catalogs.
 
 - **`schema/source.db`** — Primary tracking database with per-table timing, bytes transferred, index/constraint progress, and CDC sentinel state (`replay_lsn`, `write_lsn`, `endpos`).
 - **`schema/filter.db`** — Extension filtering state. The `s_depend` table must have rows after STEP 1 or extension-owned objects won't be filtered.
@@ -392,7 +392,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `resume-migration.sh` | Recovery | Resume an interrupted migration |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
 | `drop-replication-slots.sh` | Cleanup | Remove replication slots and origins |
-| `stop_cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
+| `stop-cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
 | `verify-migration.sh` | Cutover | Verify schema and data consistency between source and target |
 
 ## Critical Warnings

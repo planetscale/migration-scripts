@@ -291,7 +291,7 @@ Cleans up pgcopydb replication artifacts on both source and target databases.
 
 ### Cutover
 
-#### `stop_cdc.sh`
+#### `stop-cdc.sh`
 
 Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover.
 
@@ -300,14 +300,14 @@ Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific 
 psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
 
 # Set the endpoint
-~/stop_cdc.sh 41EBA/7C7A1AD8
-MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop_cdc.sh 41EBA/7C7A1AD8  # explicit dir
+~/stop-cdc.sh 41EBA/7C7A1AD8
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh 41EBA/7C7A1AD8  # explicit dir
 ```
 
 **Cutover procedure:**
 1. Stop writes to the source database (maintenance mode, read-only, etc.)
 2. Get the current WAL LSN from the source
-3. Run `stop_cdc.sh` with that LSN
+3. Run `stop-cdc.sh` with that LSN
 4. Wait for `check-cdc-status.sh` to show the apply LSN has reached the endpoint
 5. pgcopydb exits cleanly
 6. Verify data on the target
@@ -369,7 +369,7 @@ pgcopydb tracks all migration state in SQLite databases inside the migration dir
   - `s_constraint` — all constraints
   - `summary` — per-object timing: start/done epochs, bytes transferred (used by `check-migration-status.sh`)
   - `vacuum_summary` — vacuum completion tracking
-  - `sentinel` — CDC state: `replay_lsn`, `write_lsn`, `endpos` (used by `check-cdc-status.sh` and `stop_cdc.sh`)
+  - `sentinel` — CDC state: `replay_lsn`, `write_lsn`, `endpos` (used by `check-cdc-status.sh` and `stop-cdc.sh`)
 
 - **`schema/filter.db`** — Extension filtering state:
   - `s_depend` — objects matched via `pg_depend` for `[exclude-extension]` filtering. **Must have rows > 0** after STEP 1 or extension-owned objects in `public` won't be filtered.
@@ -415,7 +415,7 @@ sqlite3 ~/migration_*/schema/filter.db \
 
 3. CUTOVER (when CDC is caught up)
    - Stop writes to source
-   - Run ~/stop_cdc.sh <LSN> to set the endpoint
+   - Run ~/stop-cdc.sh <LSN> to set the endpoint
    - Wait for pgcopydb to finish applying and exit
    - Verify data on target
    - Switch application to target
