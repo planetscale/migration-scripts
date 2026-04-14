@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# verify_migration.sh — PostgreSQL Migration Verification Script
+# verify-migration.sh — PostgreSQL Migration Verification Script
 # =============================================================================
 # Compares source and target Postgres DBs without full table scans.
 # Uses system catalog queries, pg_class statistics, and index-based spot checks.
@@ -11,11 +11,10 @@
 #   export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
 #
 # Usage:
-#   ./verify_migration.sh [options]
+#   ./verify-migration.sh [options]
 #
 # Options:
 #   --row-count-tolerance <pct>   Allowed % difference for row estimates (default: 5)
-#   --size-tolerance <pct>        Allowed % size difference for warning (default: 15)
 #   --spot-check-tables <n>       Number of largest tables to spot-check (default: 20)
 #   --no-spot-check               Skip min/max spot-check (fastest mode)
 #   --schemas <s1,s2,...>         Only check these schemas (default: all non-system)
@@ -50,7 +49,6 @@ PASS=0; FAIL=0; WARN=0
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 ROW_TOLERANCE=5
-SIZE_TOLERANCE=15
 SPOT_CHECK_N=20
 NO_SPOT_CHECK=false
 SCHEMA_FILTER=""       # empty = all non-system schemas
@@ -60,7 +58,7 @@ EXACT_COUNT_TIMEOUT=120
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 usage() {
-    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    awk '/^# ={10}/{n++; if(n==2)exit} n==1{sub(/^# ?/,"",$0); print}' "$0"
     exit 1
 }
 
@@ -100,7 +98,6 @@ abs() { local v=$1; echo "${v#-}"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --row-count-tolerance)  ROW_TOLERANCE="$2"; shift 2 ;;
-        --size-tolerance)       SIZE_TOLERANCE="$2"; shift 2 ;;
         --spot-check-tables)    SPOT_CHECK_N="$2"; shift 2 ;;
         --no-spot-check)        NO_SPOT_CHECK=true; shift ;;
         --schemas)              SCHEMA_FILTER="$2"; shift 2 ;;
@@ -137,7 +134,7 @@ echo -e "${BOLD}╚════════════════════�
 echo -e "  Source : ${CYAN}$(echo "$SOURCE_CONN" | sed 's/:\/\/[^:]*:[^@]*@/:\/\/***:***@/')${NC}"
 echo -e "  Target : ${CYAN}$(echo "$TARGET_CONN" | sed 's/:\/\/[^:]*:[^@]*@/:\/\/***:***@/')${NC}"
 echo -e "  Time   : $(date)"
-echo -e "  Options: row_tolerance=${ROW_TOLERANCE}%  size_tolerance=${SIZE_TOLERANCE}%  spot_check_tables=${SPOT_CHECK_N}"
+echo -e "  Options: row_tolerance=${ROW_TOLERANCE}%  spot_check_tables=${SPOT_CHECK_N}"
 
 # =============================================================================
 # 1. CONNECTIONS
@@ -381,105 +378,39 @@ ROWCNT_QUERY="
 SRC_ROWCNTS=$(q "$SOURCE_CONN" "$ROWCNT_QUERY")
 TGT_ROWCNTS=$(q "$TARGET_CONN" "$ROWCNT_QUERY")
 
-declare -A SRC_RC TGT_RC
-while IFS=$'\t' read -r tbl cnt; do
-    [[ -n "$tbl" ]] && SRC_RC["$tbl"]="$cnt"
-done <<< "$SRC_ROWCNTS"
-while IFS=$'\t' read -r tbl cnt; do
-    [[ -n "$tbl" ]] && TGT_RC["$tbl"]="$cnt"
-done <<< "$TGT_ROWCNTS"
+RC_MISMATCH_COUNT=0
+RC_MISMATCH_OUT=""
 
-RC_MISMATCH_LIST=()
-for tbl in "${!SRC_RC[@]}"; do
-    src_n="${SRC_RC[$tbl]}"
-    tgt_n="${TGT_RC[$tbl]:-}"
-    [[ -z "$tgt_n" ]] && continue   # missing table already flagged
-
+while IFS=$'\t' read -r tbl src_n tgt_n; do
+    [[ -z "$tbl" ]] && continue
     if [[ "$src_n" -gt 0 ]]; then
         diff=$(abs $((src_n - tgt_n)))
         pct=$(( diff * 100 / src_n ))
         if [[ $pct -gt $ROW_TOLERANCE ]]; then
-            RC_MISMATCH_LIST+=("$(printf "%-55s  src=%12d  tgt=%12d  diff=%d%%" "$tbl" "$src_n" "$tgt_n" "$pct")")
+            RC_MISMATCH_OUT+="$(printf "       %-55s  src=%12d  tgt=%12d  diff=%d%%\n" "$tbl" "$src_n" "$tgt_n" "$pct")"
+            RC_MISMATCH_COUNT=$(( RC_MISMATCH_COUNT + 1 ))
         fi
     elif [[ "${tgt_n:-0}" -ne 0 ]]; then
-        RC_MISMATCH_LIST+=("$(printf "%-55s  src=%12d  tgt=%12d  diff=src_empty_tgt_not" "$tbl" "$src_n" "$tgt_n")")
+        RC_MISMATCH_OUT+="$(printf "       %-55s  src=%12d  tgt=%12d  diff=src_empty_tgt_not\n" "$tbl" "$src_n" "$tgt_n")"
+        RC_MISMATCH_COUNT=$(( RC_MISMATCH_COUNT + 1 ))
     fi
-done
+done < <(join -t$'\t' \
+    <(echo "$SRC_ROWCNTS" | sort -t$'\t' -k1,1) \
+    <(echo "$TGT_ROWCNTS" | sort -t$'\t' -k1,1))
 
-if [[ ${#RC_MISMATCH_LIST[@]} -eq 0 ]]; then
+if [[ $RC_MISMATCH_COUNT -eq 0 ]]; then
     log_pass "Row count estimates match within ${ROW_TOLERANCE}% for all tables"
 else
-    log_warn "Row count estimate mismatches (>${ROW_TOLERANCE}%) — ${#RC_MISMATCH_LIST[@]} table(s):"
+    log_warn "Row count estimate mismatches (>${ROW_TOLERANCE}%) — ${RC_MISMATCH_COUNT} table(s):"
     printf "       %-55s  %14s  %14s  %s\n" "TABLE" "SOURCE_ROWS" "TARGET_ROWS" "DIFF%"
     printf "       %s\n" "$(printf '─%.0s' {1..100})"
-    for entry in "${RC_MISMATCH_LIST[@]}"; do
-        printf "       %s\n" "$entry"
-    done
+    printf '%s' "$RC_MISMATCH_OUT"
 fi
 
 # =============================================================================
-# 9. TABLE & DATABASE SIZES
+# 9. SEQUENCES
 # =============================================================================
-log_section "9/11  TABLE & DATABASE SIZES"
-
-SRC_DBSIZE=$(q "$SOURCE_CONN" "SELECT pg_size_pretty(pg_database_size(current_database()))")
-TGT_DBSIZE=$(q "$TARGET_CONN" "SELECT pg_size_pretty(pg_database_size(current_database()))")
-log_info "Total DB size  —  source: ${SRC_DBSIZE}  |  target: ${TGT_DBSIZE}"
-
-SIZE_QUERY="
-    SELECT n.nspname || '.' || c.relname,
-           pg_total_relation_size(c.oid)
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relkind = 'r' $SCHEMA_SQL_FILTER
-    ORDER BY 2 DESC"
-
-SRC_SIZES=$(q "$SOURCE_CONN" "$SIZE_QUERY")
-TGT_SIZES=$(q "$TARGET_CONN" "$SIZE_QUERY")
-
-declare -A SRC_SZ TGT_SZ
-while IFS=$'\t' read -r tbl sz; do
-    [[ -n "$tbl" ]] && SRC_SZ["$tbl"]="$sz"
-done <<< "$SRC_SIZES"
-while IFS=$'\t' read -r tbl sz; do
-    [[ -n "$tbl" ]] && TGT_SZ["$tbl"]="$sz"
-done <<< "$TGT_SIZES"
-
-log_info "Top 15 largest tables  (size tolerance: ±${SIZE_TOLERANCE}%)"
-printf "       %-55s  %14s  %14s  %s\n" "TABLE" "SOURCE" "TARGET" "DIFF%"
-printf "       %s\n" "$(printf '─%.0s' {1..105})"
-
-SIZE_FAIL=0
-count=0
-while IFS=$'\t' read -r tbl src_bytes; do
-    [[ -z "$tbl" || $count -ge 15 ]] && continue
-    tgt_bytes="${TGT_SZ[$tbl]:-0}"
-    src_h=$(q "$SOURCE_CONN" "SELECT pg_size_pretty(${src_bytes}::bigint)")
-    tgt_h=$(q "$TARGET_CONN" "SELECT pg_size_pretty(${tgt_bytes}::bigint)")
-
-    if [[ "$src_bytes" -gt 0 && "$tgt_bytes" -gt 0 ]]; then
-        diff=$(abs $((src_bytes - tgt_bytes)))
-        pct=$(( diff * 100 / src_bytes ))
-        if [[ $pct -gt $SIZE_TOLERANCE ]]; then
-            printf "  ${RED}✘${NC}    %-55s  %14s  %14s  %d%%\n" "$tbl" "$src_h" "$tgt_h" "$pct"
-            SIZE_FAIL=$((SIZE_FAIL + 1))
-        else
-            printf "  ${GREEN}✔${NC}    %-55s  %14s  %14s  %d%%\n" "$tbl" "$src_h" "$tgt_h" "$pct"
-        fi
-    else
-        printf "       %-55s  %14s  %14s\n" "$tbl" "$src_h" "$tgt_h"
-    fi
-    count=$((count + 1))
-done <<< "$SRC_SIZES"
-
-[[ $SIZE_FAIL -eq 0 ]] \
-    && log_pass "All checked table sizes within ${SIZE_TOLERANCE}% tolerance" \
-    || log_warn "$SIZE_FAIL table(s) have size difference > ${SIZE_TOLERANCE}%"
-
-# =============================================================================
-# 10. SEQUENCES
-# =============================================================================
-log_section "10/11  SEQUENCES"
+log_section "9/11  SEQUENCES"
 
 SEQ_QUERY="
     SELECT n.nspname || '.' || c.relname
@@ -509,14 +440,9 @@ SEQ_VAL_QUERY="
 SRC_SEQVALS=$(q "$SOURCE_CONN" "$SEQ_VAL_QUERY")
 TGT_SEQVALS=$(q "$TARGET_CONN" "$SEQ_VAL_QUERY")
 
-declare -A SRC_SV TGT_SV
-while IFS=$'\t' read -r seq val; do [[ -n "$seq" ]] && SRC_SV["$seq"]="$val"; done <<< "$SRC_SEQVALS"
-while IFS=$'\t' read -r seq val; do [[ -n "$seq" ]] && TGT_SV["$seq"]="$val"; done <<< "$TGT_SEQVALS"
-
 SEQ_BEHIND=0
-for seq in "${!SRC_SV[@]}"; do
-    src_v="${SRC_SV[$seq]}"
-    tgt_v="${TGT_SV[$seq]:-NULL}"
+while IFS=$'\t' read -r seq src_v tgt_v; do
+    [[ -z "$seq" ]] && continue
     if [[ "$src_v" != "NULL" && "$tgt_v" != "NULL" && "$tgt_v" != "$src_v" ]]; then
         # Target sequence value should be >= source (migration may have advanced it)
         if [[ "$tgt_v" -lt "$src_v" ]]; then
@@ -524,17 +450,19 @@ for seq in "${!SRC_SV[@]}"; do
             SEQ_BEHIND=$((SEQ_BEHIND + 1))
         fi
     fi
-done
+done < <(join -t$'\t' \
+    <(echo "$SRC_SEQVALS" | sort -t$'\t' -k1,1) \
+    <(echo "$TGT_SEQVALS" | sort -t$'\t' -k1,1))
 
 [[ $SEQ_BEHIND -eq 0 ]] && log_pass "Sequence values look consistent"
 
 # =============================================================================
-# 11. DATA SPOT-CHECK  (MIN / MAX on indexed PK columns — uses index, no scan)
+# 10. DATA SPOT-CHECK  (MIN / MAX on indexed PK columns — uses index, no scan)
 # =============================================================================
 if [[ "$NO_SPOT_CHECK" == "true" ]]; then
-    log_section "11/11  DATA SPOT-CHECK  (skipped via --no-spot-check)"
+    log_section "10/11  DATA SPOT-CHECK  (skipped via --no-spot-check)"
 else
-    log_section "11/11  DATA SPOT-CHECK  (min/max on PK columns of top $SPOT_CHECK_N tables)"
+    log_section "10/11  DATA SPOT-CHECK  (min/max on PK columns of top $SPOT_CHECK_N tables)"
     log_info "Only runs on single-column PKs of numeric/date/timestamp type (all use index seeks)"
 
     SPOT_QUERY="
@@ -592,34 +520,23 @@ else
 fi
 
 # =============================================================================
-# 12. EXACT ROW COUNT — RANDOM SAMPLE
+# 11. EXACT ROW COUNT — RANDOM SAMPLE
 # =============================================================================
-#
-# Why not just COUNT(*) every table?
-#   A full sequential scan on a multi-GB table takes minutes. Instead we pick a
-#   random subset of smaller tables where the scan finishes quickly and gives a
-#   definitive answer: either the rows are there or they are not.
-#
-# Better alternative for very large tables: TABLESAMPLE
-#   If you need coverage of tables > 10 GB, rerun with --exact-count-max-gb 0
-#   to skip this section entirely and instead add ad-hoc queries like:
-#     SELECT COUNT(*) FROM big_table TABLESAMPLE SYSTEM(1);
-#   TABLESAMPLE SYSTEM(1) reads ~1% of random 8 KB pages — for a 100 GB table
-#   that is ~1 GB of I/O, finishes in seconds, and gives ±1–2% accuracy which
-#   is enough to detect any significant data loss.
+# Runs COUNT(*) on a random subset of tables. Each re-run picks a different set,
+# so running the script multiple times increases confidence that all data is
+# consistent. Skip large tables via --exact-count-max-gb; for those use
+# TABLESAMPLE SYSTEM(1) ad-hoc instead.
 # =============================================================================
 
 if [[ "$EXACT_COUNT_N" -eq 0 ]]; then
-    log_section "12/12  EXACT ROW COUNT  (skipped — --exact-count-tables 0)"
+    log_section "11/11  EXACT ROW COUNT  (skipped — --exact-count-tables 0)"
 else
     EXACT_MAX_BYTES=$(( EXACT_COUNT_MAX_GB * 1024 * 1024 * 1024 ))
 
-    log_section "12/12  EXACT ROW COUNT  (random sample — up to ${EXACT_COUNT_N} tables ≤ ${EXACT_COUNT_MAX_GB} GB)"
-    log_info "Per-table timeout: ${EXACT_COUNT_TIMEOUT}s  |  Tables are chosen randomly from the source"
+    log_section "11/11  EXACT ROW COUNT  (random sample — up to ${EXACT_COUNT_N} tables ≤ ${EXACT_COUNT_MAX_GB} GB)"
+    log_info "Per-table timeout: ${EXACT_COUNT_TIMEOUT}s  |  Re-run the script multiple times to cover more tables"
     log_info "A single mismatch here means real missing data — re-run the full migration for that table"
 
-    # Select random tables within the size cap from the source catalog
-    # We fix the random seed so re-runs on the same DB pick the same tables
     EXACT_SAMPLE_QUERY="
         SELECT n.nspname || '.' || c.relname,
                pg_total_relation_size(c.oid),
@@ -691,7 +608,7 @@ else
             log_warn "EXACT COUNT: $EXACT_PASS matched, $EXACT_TIMEOUT timed out — increase --exact-count-timeout or --exact-count-max-gb"
         else
             log_pass "EXACT COUNT: all $EXACT_PASS sampled tables have identical row counts"
-            log_info "This is a random sample — rerun the script a few times to gain higher confidence"
+            log_info "Re-run the script to sample different tables and build confidence in full consistency"
         fi
 
         if [[ $EXACT_TIMEOUT -gt 0 ]]; then

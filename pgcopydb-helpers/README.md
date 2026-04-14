@@ -191,7 +191,11 @@ When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 M
 
 4. **Wait** for pgcopydb to apply all remaining changes and exit. Monitor with `check-cdc-status.sh`.
 
-5. **Verify** data on the target.
+5. **Verify** data on the target using `verify-migration.sh`.
+
+   ```bash
+   ~/verify-migration.sh
+   ```
 
 6. **Switch** your application to the PlanetScale target.
 
@@ -389,6 +393,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
 | `drop-replication-slots.sh` | Cleanup | Remove replication slots and origins |
 | `stop_cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
+| `verify-migration.sh` | Cutover | Verify schema and data consistency between source and target |
 
 ## Critical Warnings
 
