@@ -393,6 +393,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
 | `drop-replication-slots.sh` | Cleanup | Remove replication slots and origins |
 | `stop_cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
+| `verify-migration.sh` | Cutover | Verify schema and data consistency between source and target |
 
 ## Critical Warnings
 
