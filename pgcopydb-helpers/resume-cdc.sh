@@ -45,6 +45,12 @@ cd "$MIGRATION_DIR"
 ulimit -c unlimited
 echo "$MIGRATION_DIR/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
 
+PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || true)
+if [ -z "$PGCOPYDB_BIN" ]; then
+    echo "ERROR: pgcopydb not found on PATH"
+    exit 1
+fi
+
 # Back up SQLite catalog before resume
 cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date +%Y%m%d-%H%M%S)"
 
@@ -55,7 +61,7 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
     echo "Migration dir: $MIGRATION_DIR"
     echo "=========================================="
 
-    /usr/lib/postgresql/17/bin/pgcopydb follow \
+    "$PGCOPYDB_BIN" follow \
         --plugin wal2json \
         --resume \
         --not-consistent \
