@@ -250,6 +250,21 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh          # speci
 
 ---
 
+#### `resume-cdc.sh`
+
+Resumes only the CDC phase of a previously interrupted migration using `pgcopydb follow`. Does not re-attempt the clone (schema dump/restore, COPY, index creation).
+
+```bash
+~/resume-cdc.sh                                                          # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                # specify explicitly
+```
+
+**When to use:** After the initial COPY completed successfully but CDC was interrupted (crash, reboot, connection drop). If you are unsure whether COPY finished, use `resume-migration.sh` instead — it will resume from wherever pgcopydb left off. Logs are written to `resume-cdc-TIMESTAMP.log` in the migration directory.
+
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, existing migration directory with completed COPY
+
+---
+
 #### `target-clean.sh`
 
 Wipes all user objects from the target database for a fresh re-migration. Shows a summary of what will be dropped and prompts for confirmation.
@@ -424,7 +439,8 @@ sqlite3 ~/migration_*/schema/filter.db \
    - Run ~/drop-replication-slots.sh to remove replication artifacts
 
 IF SOMETHING GOES WRONG:
-   - Run ~/resume-migration.sh to resume after a crash
+   - Run ~/resume-migration.sh to resume after a crash (full clone + CDC)
+   - Run ~/resume-cdc.sh to resume only CDC (when COPY already completed)
    - Run ~/target-clean.sh + ~/drop-replication-slots.sh to start over
 ```
 
@@ -436,7 +452,7 @@ All scripts use variables at the top that can be adjusted per migration. See [Cl
 |----------|---------|---------|
 | `TABLE_JOBS` | 16 | run-migration.sh, resume-migration.sh |
 | `INDEX_JOBS` | 12 | run-migration.sh, resume-migration.sh |
-| `FILTER_FILE` | ~/filters.ini | run-migration.sh, resume-migration.sh |
+| `FILTER_FILE` | ~/filters.ini | run-migration.sh, resume-migration.sh, resume-cdc.sh |
 | `--split-tables-larger-than` | 50GB | run-migration.sh, resume-migration.sh |
 
 ## Critical Warnings
