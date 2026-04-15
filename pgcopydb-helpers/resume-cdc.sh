@@ -40,6 +40,7 @@ echo "Resuming CDC in: $MIGRATION_DIR"
 
 LOGFILE=$MIGRATION_DIR/resume-cdc-$(date +%Y%m%d-%H%M%S).log
 FILTER_FILE=~/filters.ini
+TABLE_JOBS=16
 
 cd "$MIGRATION_DIR"
 ulimit -c unlimited
@@ -69,6 +70,8 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
         --source "$PGCOPYDB_SOURCE_PGURI" \
         --target "$PGCOPYDB_TARGET_PGURI" \
         --filter "$FILTER_FILE" \
+        --split-tables-larger-than 50GB \
+        --split-max-parts "$TABLE_JOBS" \
         --dir "$MIGRATION_DIR"
 
     EXIT_CODE=$?
