@@ -45,7 +45,7 @@ SUB_NAME="${2:-pgcopydb_handoff}"
 PGCOPYDB_SLOT="${PGCOPYDB_SLOT_NAME:-pgcopydb}"
 
 # Find the most recent migration directory
-MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_* 2>/dev/null | head -1 || true)}"
+MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 if [ -z "$MIGRATION_DIR" ] || [ ! -d "$MIGRATION_DIR" ]; then
     echo "ERROR: No migration directory found. Set MIGRATION_DIR or pass as env var."
     exit 1
