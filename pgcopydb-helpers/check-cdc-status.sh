@@ -16,7 +16,7 @@ set +a
 set -u
 
 # --- Configuration ---
-MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_* 2>/dev/null | head -1 || true)}"
+MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 
 if [ -z "$MIGRATION_DIR" ]; then
     echo "ERROR: No migration directory found"

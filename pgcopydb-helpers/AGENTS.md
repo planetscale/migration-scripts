@@ -35,6 +35,47 @@ Compares performance-relevant PostgreSQL parameters between source and target da
 
 ---
 
+#### `verify-migration.sh`
+
+Verifies that all data was copied correctly from source to target after a migration. Runs 11 checks covering schema, row counts, sequences, and data spot-checks — without full table scans. Safe for multi-TB databases; typically completes in under 2 minutes.
+
+```bash
+~/verify-migration.sh
+~/verify-migration.sh --row-count-tolerance 1 --exact-count-tables 20
+```
+
+**Checks performed:**
+- **Schema:** tables, columns (type/nullable/default), indexes, constraints (PK/FK/UNIQUE/CHECK), views, functions/procedures
+- **Row counts:** fast estimates via `pg_class.reltuples` (no table scan), with configurable % tolerance
+- **Sequences:** presence and `last_value` comparison
+- **Data spot-check:** `MIN`/`MAX` on PK columns of the largest tables (index seeks only — no scan)
+- **Exact row counts:** random sample of up to 10 tables ≤ 10 GB with real `COUNT(*)` and per-table timeout
+- **Extensions:** presence and version match
+
+**Options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--row-count-tolerance <pct>` | 5 | Allowed % difference for `pg_class` row estimates |
+| `--spot-check-tables <n>` | 20 | Number of tables for MIN/MAX spot-check |
+| `--no-spot-check` | — | Skip MIN/MAX spot-check entirely |
+| `--schemas <s1,s2,...>` | all | Restrict checks to specific schemas |
+| `--exact-count-tables <n>` | 10 | Tables to exact-count (0 = skip) |
+| `--exact-count-max-gb <n>` | 10 | Max table size in GB for exact count |
+| `--exact-count-timeout <s>` | 120 | Per-table `COUNT(*)` timeout in seconds |
+
+**When to use:** After `pgcopydb` finishes the initial COPY phase and before enabling CDC or cutting over. Run it multiple times — exact-count tables are chosen randomly, so repeated runs cover more tables.
+
+**Interpreting row count mismatches:** `pg_class.reltuples` estimates are only refreshed by `ANALYZE`. Run `ANALYZE` on both DBs before running this script for the most accurate estimates. If target shows _more_ rows than source for some tables, the stats are stale — not a data problem.
+
+**Exit codes:** `0` = all checks passed, `1` = warnings only, `2` = one or more failures.
+
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
+
+**Read-only** — makes no modifications to either database.
+
+---
+
 #### `preflight-check.sh`
 
 Validates all migration prerequisites before starting `pgcopydb clone --follow`. Checks source, target, and migration instance, reporting PASS/WARN/FAIL for each item.
@@ -197,15 +238,30 @@ Displays CDC-specific replication progress: apply and streaming LSN positions, b
 Resumes a previously interrupted `pgcopydb clone --follow` migration. Backs up the SQLite catalog before resuming.
 
 ```bash
-~/resume-migration.sh                          # uses most recent migration dir
-~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS  # specify explicitly
+~/resume-migration.sh                                                    # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh          # specify explicitly
 ```
 
-**Important:** This script intentionally does NOT use `--split-tables-larger-than` with `--resume`. pgcopydb truncates the entire table before checking split parts on resume, which causes data loss.
+**Important:** The script passes `--split-tables-larger-than` to match `run-migration.sh`. pgcopydb requires catalog consistency — if the original run used split tables, the resume must pass the same value.
 
-**When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. Do NOT use after a successful migration — use `run-migration.sh` to start fresh.
+**When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. To start completely over instead, run `~/target-clean.sh` + `~/drop-replication-slots.sh` first, then `~/start-migration-screen.sh`.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, existing migration directory
+
+---
+
+#### `resume-cdc.sh`
+
+Resumes only the CDC phase of a previously interrupted migration using `pgcopydb follow`. Does not re-attempt the clone (schema dump/restore, COPY, index creation).
+
+```bash
+~/resume-cdc.sh                                                          # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                # specify explicitly
+```
+
+**When to use:** After the initial COPY completed successfully but CDC was interrupted (crash, reboot, connection drop). If you are unsure whether COPY finished, use `resume-migration.sh` instead — it will resume from wherever pgcopydb left off. Logs are written to `resume-cdc-TIMESTAMP.log` in the migration directory.
+
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, existing migration directory with completed COPY
 
 ---
 
@@ -250,7 +306,7 @@ Cleans up pgcopydb replication artifacts on both source and target databases.
 
 ### Cutover
 
-#### `stop_cdc.sh`
+#### `stop-cdc.sh`
 
 Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover.
 
@@ -259,14 +315,14 @@ Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific 
 psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
 
 # Set the endpoint
-~/stop_cdc.sh 41EBA/7C7A1AD8
-~/stop_cdc.sh 41EBA/7C7A1AD8 ~/migration_YYYYMMDD-HHMMSS  # explicit dir
+~/stop-cdc.sh 41EBA/7C7A1AD8
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh 41EBA/7C7A1AD8  # explicit dir
 ```
 
 **Cutover procedure:**
 1. Stop writes to the source database (maintenance mode, read-only, etc.)
 2. Get the current WAL LSN from the source
-3. Run `stop_cdc.sh` with that LSN
+3. Run `stop-cdc.sh` with that LSN
 4. Wait for `check-cdc-status.sh` to show the apply LSN has reached the endpoint
 5. pgcopydb exits cleanly
 6. Verify data on the target
@@ -328,7 +384,7 @@ pgcopydb tracks all migration state in SQLite databases inside the migration dir
   - `s_constraint` — all constraints
   - `summary` — per-object timing: start/done epochs, bytes transferred (used by `check-migration-status.sh`)
   - `vacuum_summary` — vacuum completion tracking
-  - `sentinel` — CDC state: `replay_lsn`, `write_lsn`, `endpos` (used by `check-cdc-status.sh` and `stop_cdc.sh`)
+  - `sentinel` — CDC state: `replay_lsn`, `write_lsn`, `endpos` (used by `check-cdc-status.sh` and `stop-cdc.sh`)
 
 - **`schema/filter.db`** — Extension filtering state:
   - `s_depend` — objects matched via `pg_depend` for `[exclude-extension]` filtering. **Must have rows > 0** after STEP 1 or extension-owned objects in `public` won't be filtered.
@@ -374,7 +430,7 @@ sqlite3 ~/migration_*/schema/filter.db \
 
 3. CUTOVER (when CDC is caught up)
    - Stop writes to source
-   - Run ~/stop_cdc.sh <LSN> to set the endpoint
+   - Run ~/stop-cdc.sh <LSN> to set the endpoint
    - Wait for pgcopydb to finish applying and exit
    - Verify data on target
    - Switch application to target
@@ -383,7 +439,8 @@ sqlite3 ~/migration_*/schema/filter.db \
    - Run ~/drop-replication-slots.sh to remove replication artifacts
 
 IF SOMETHING GOES WRONG:
-   - Run ~/resume-migration.sh to resume after a crash
+   - Run ~/resume-migration.sh to resume after a crash (full clone + CDC)
+   - Run ~/resume-cdc.sh to resume only CDC (when COPY already completed)
    - Run ~/target-clean.sh + ~/drop-replication-slots.sh to start over
 ```
 
@@ -395,13 +452,12 @@ All scripts use variables at the top that can be adjusted per migration. See [Cl
 |----------|---------|---------|
 | `TABLE_JOBS` | 16 | run-migration.sh, resume-migration.sh |
 | `INDEX_JOBS` | 12 | run-migration.sh, resume-migration.sh |
-| `FILTER_FILE` | ~/filters.ini | run-migration.sh, resume-migration.sh |
-| `--split-tables-larger-than` | 50GB | run-migration.sh only (not resume) |
+| `FILTER_FILE` | ~/filters.ini | run-migration.sh, resume-migration.sh, resume-cdc.sh |
+| `--split-tables-larger-than` | 50GB | run-migration.sh, resume-migration.sh |
 
 ## Critical Warnings
 
-- **Never use `--split-tables-larger-than` with `--resume`** — pgcopydb truncates the entire table before checking parts, causing data loss.
-- **Never use `pgcopydb --restart`** without backing up first — it wipes the CDC directory AND SQLite catalogs.
+- **Do not use `pgcopydb --restart`** — it wipes the CDC directory and SQLite catalogs without cleaning the target database or correcting previous failures. To start over, use `~/target-clean.sh` + `~/drop-replication-slots.sh` + `~/start-migration-screen.sh` instead.
 - **Always clean up replication slots** after a migration — unconsumed slots cause WAL accumulation on the source.
 - **Verify extension filtering after STEP 1** — check `SELECT COUNT(*) FROM s_depend;` in `filter.db`. If it's 0, extension-owned objects in `public` won't be filtered.
 - **pg_restore error tolerance** — pgcopydb allows up to 10 restore errors by default. If your migration has more, you may need a custom build with a higher `MAX_TOLERATED_RESTORE_ERRORS`.

@@ -9,6 +9,9 @@ Migration toolkit for [pgcopydb](https://github.com/planetscale/pgcopydb) — us
 **Permissions:** The migration user needs access to all schemas and tables being migrated. For CDC migrations (`--follow`), it also needs the `REPLICATION` attribute. If you are using a dedicated migration user rather than the database owner, grant the following:
 
 ```sql
+-- Create the migration user
+CREATE ROLE migration_user WITH LOGIN PASSWORD 'your-strong-password' REPLICATION;
+
 -- Connect and schema access
 GRANT CONNECT ON DATABASE mydb TO migration_user;
 GRANT USAGE ON SCHEMA public TO migration_user;
@@ -19,12 +22,40 @@ GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO migration_user;
 
 -- For future tables created before migration starts
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO migration_user;
-
--- Replication attribute (required for CDC migrations)
-ALTER ROLE migration_user WITH REPLICATION;
 ```
 
 Repeat the `GRANT USAGE`, `GRANT SELECT`, and `ALTER DEFAULT PRIVILEGES` statements for each schema being migrated.
+
+**`fix-replica-identity.sh` permissions:** The script runs `ALTER TABLE ... REPLICA IDENTITY FULL` on the source, which requires table ownership — `SELECT` alone is not sufficient. Grant `migration_user` membership in the role(s) that own the tables so it inherits ownership privileges. First, find which owner roles are involved:
+
+```sql
+-- Find roles that own tables without a primary key or unique index
+SELECT DISTINCT r.rolname AS owner_role
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_roles r ON r.oid = c.relowner
+WHERE c.relkind = 'r'
+  AND c.relreplident = 'd'
+  AND n.nspname NOT LIKE 'pg_%'
+  AND n.nspname != 'information_schema'
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_constraint con
+    WHERE con.conrelid = c.oid
+      AND con.contype IN ('p', 'u')
+  );
+```
+
+Then grant membership for each `owner_role` returned:
+
+```sql
+GRANT <owner_role> TO migration_user;
+```
+
+After running `fix-replica-identity.sh`, revoke the membership:
+
+```sql
+REVOKE <owner_role> FROM migration_user;
+```
 
 **Logical replication (CDC only):** Logical replication must be enabled on the source before starting a `--follow` migration. How to enable it depends on your platform:
 
@@ -162,13 +193,17 @@ To receive proactive Slack alerts on failures and errors without manually runnin
 3. **Set the CDC endpoint** so pgcopydb stops after reaching that position:
 
    ```bash
-   ~/stop_cdc.sh <LSN>
-   ~/stop_cdc.sh <LSN> ~/migration_YYYYMMDD-HHMMSS  # explicit dir
+   ~/stop-cdc.sh <LSN>
+   MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh <LSN>  # explicit dir
    ```
 
 4. **Wait** for pgcopydb to apply all remaining changes and exit. Monitor with `check-cdc-status.sh`.
 
-5. **Verify** data on the target.
+5. **Verify** data on the target using `verify-migration.sh`.
+
+   ```bash
+   ~/verify-migration.sh
+   ```
 
 6. **Switch** your application to the PlanetScale target.
 
@@ -188,11 +223,20 @@ This drops the replication slot on the source, the replication origin on the tar
 If pgcopydb crashes, the instance reboots, or the migration is interrupted:
 
 ```bash
-~/resume-migration.sh                              # uses most recent migration dir
-~/resume-migration.sh ~/migration_YYYYMMDD-HHMMSS  # or specify explicitly
+~/resume-migration.sh                                                        # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh              # or specify explicitly
 ```
 
-This backs up the SQLite catalog before resuming. It uses `--not-consistent` to allow resuming from a mid-transaction state, and intentionally omits `--split-tables-larger-than` because pgcopydb truncates the entire table before checking split parts on resume, which causes data loss.
+This backs up the SQLite catalog before resuming and uses `--not-consistent` to allow resuming from a mid-transaction state. The script passes `--split-tables-larger-than` to match `run-migration.sh` — pgcopydb requires catalog consistency, so the resume must use the same split value as the original run.
+
+If the initial COPY completed successfully but CDC was interrupted, you can resume only the CDC phase without re-attempting the clone:
+
+```bash
+~/resume-cdc.sh                                                              # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                    # or specify explicitly
+```
+
+This runs `pgcopydb follow` directly (not `clone --follow`), skipping schema dump/restore, COPY, and index creation entirely. Use this when you know the data copy is complete and only CDC streaming needs to restart. Logs are written to `resume-cdc-TIMESTAMP.log` in the migration directory.
 
 To start completely over, wipe the target and clean up replication:
 
@@ -326,7 +370,7 @@ If `resume-migration.sh` was used, check `resume-*.log` files in the migration d
 
 ### SQLite Catalogs
 
-pgcopydb tracks all migration state in SQLite databases inside the migration directory. Several of the monitoring scripts (`check-migration-status.sh`, `check-cdc-status.sh`, `stop_cdc.sh`) read directly from these catalogs.
+pgcopydb tracks all migration state in SQLite databases inside the migration directory. Several of the monitoring scripts (`check-migration-status.sh`, `check-cdc-status.sh`, `stop-cdc.sh`) read directly from these catalogs.
 
 - **`schema/source.db`** — Primary tracking database with per-table timing, bytes transferred, index/constraint progress, and CDC sentinel state (`replay_lsn`, `write_lsn`, `endpos`).
 - **`schema/filter.db`** — Extension filtering state. The `s_depend` table must have rows after STEP 1 or extension-owned objects won't be filtered.
@@ -363,14 +407,15 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `start-migration-screen.sh` | Migrate | Run the migration in a screen session |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
-| `resume-migration.sh` | Recovery | Resume an interrupted migration |
+| `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
+| `resume-cdc.sh` | Recovery | Resume only the CDC phase (skips clone) |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
 | `drop-replication-slots.sh` | Cleanup | Remove replication slots and origins |
-| `stop_cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
+| `stop-cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
+| `verify-migration.sh` | Cutover | Verify schema and data consistency between source and target |
 
 ## Critical Warnings
 
-- **Never use `--split-tables-larger-than` with `--resume`** — pgcopydb truncates the entire table before checking parts, causing data loss.
-- **Never use `pgcopydb --restart`** without backing up first — it wipes the CDC directory AND SQLite catalogs.
+- **Do not use `pgcopydb --restart`** — it wipes the CDC directory and SQLite catalogs without cleaning the target database or correcting previous failures. To start over, use `~/target-clean.sh` + `~/drop-replication-slots.sh` + `~/start-migration-screen.sh` instead.
 - **Always clean up replication slots** when done — unconsumed slots cause unbounded WAL growth on the source.
 - **Verify extension filtering after STEP 1** — if `s_depend` count is 0, extension-owned objects won't be excluded.

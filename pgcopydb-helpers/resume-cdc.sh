@@ -1,15 +1,16 @@
 #!/bin/bash
 #
-# Usage: ~/resume-migration.sh
-# Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh
+# Usage: ~/resume-cdc.sh
+# Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh
 #
-# Resumes a previously interrupted pgcopydb clone --follow migration.
-# Uses MIGRATION_DIR env var if set, otherwise the most recent ~/migration_*/ directory.
+# Resumes only the CDC (change data capture) phase of a previously
+# interrupted migration. Unlike resume-migration.sh, this does NOT
+# re-attempt the clone — it runs pgcopydb follow directly.
+#
+# Use this when the initial COPY completed successfully but CDC was
+# interrupted (crash, reboot, connection drop). Uses MIGRATION_DIR
+# env var if set, otherwise the most recent ~/migration_*/ directory.
 # Backs up the SQLite catalog before resuming.
-#
-# Uses --split-tables-larger-than to match run-migration.sh. pgcopydb
-# requires catalog consistency — if the original run used split tables,
-# the resume must pass the same value.
 #
 set -eo pipefail
 
@@ -30,21 +31,26 @@ fi
 MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 
 if [ -z "$MIGRATION_DIR" ] || [ ! -d "$MIGRATION_DIR" ]; then
-    echo "ERROR: No migration directory found. Pass the path as an argument:"
-    echo "  $0 ~/migration_YYYYMMDD-HHMMSS"
+    echo "ERROR: No migration directory found. Set the path explicitly:"
+    echo "  MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS $0"
     exit 1
 fi
 
-echo "Resuming migration in: $MIGRATION_DIR"
+echo "Resuming CDC in: $MIGRATION_DIR"
 
-LOGFILE=$MIGRATION_DIR/migration.log
+LOGFILE=$MIGRATION_DIR/resume-cdc-$(date +%Y%m%d-%H%M%S).log
 FILTER_FILE=~/filters.ini
 TABLE_JOBS=16
-INDEX_JOBS=12
 
 cd "$MIGRATION_DIR"
 ulimit -c unlimited
 echo "$MIGRATION_DIR/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
+
+PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || true)
+if [ -z "$PGCOPYDB_BIN" ]; then
+    echo "ERROR: pgcopydb not found on PATH"
+    exit 1
+fi
 
 # Back up SQLite catalog before resume
 cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date +%Y%m%d-%H%M%S)"
@@ -52,12 +58,11 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
 {
     echo ""
     echo "=========================================="
-    echo "Resuming clone --follow at $(date)"
+    echo "Resuming CDC (follow only) at $(date)"
     echo "Migration dir: $MIGRATION_DIR"
     echo "=========================================="
 
-    /usr/lib/postgresql/17/bin/pgcopydb clone \
-        --follow \
+    "$PGCOPYDB_BIN" follow \
         --plugin wal2json \
         --resume \
         --not-consistent \
@@ -65,16 +70,11 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
         --source "$PGCOPYDB_SOURCE_PGURI" \
         --target "$PGCOPYDB_TARGET_PGURI" \
         --filter "$FILTER_FILE" \
-        --no-owner \
-        --no-acl \
-        --skip-db-properties \
-        --table-jobs "$TABLE_JOBS" \
-        --index-jobs "$INDEX_JOBS" \
         --split-tables-larger-than 50GB \
         --split-max-parts "$TABLE_JOBS" \
         --dir "$MIGRATION_DIR"
 
     EXIT_CODE=$?
-    echo "Resume completed at $(date) - Exit code: $EXIT_CODE"
+    echo "CDC resume completed at $(date) - Exit code: $EXIT_CODE"
     exit "$EXIT_CODE"
 } 2>&1 | tee -a "$LOGFILE"

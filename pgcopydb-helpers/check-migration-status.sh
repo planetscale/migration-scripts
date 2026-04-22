@@ -27,7 +27,7 @@ source ~/.env
 set +a
 set -u
 
-MIGRATION_DIR=$(ls -dt ~/migration_* 2>/dev/null | head -1)
+MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 if [ -z "$MIGRATION_DIR" ]; then
     echo -e "${RED}✗ No migration directory found${NC}"
     exit 1
@@ -298,14 +298,20 @@ RESTORE_ERROR_LINE=$(grep "errors ignored on restore:" "$LOG" 2>/dev/null | tail
 RESTORE_ERRORS=$(echo "$RESTORE_ERROR_LINE" | sed -n 's/.*errors ignored on restore: \([0-9]\+\).*/\1/p')
 RESTORE_ERRORS=$((${RESTORE_ERRORS:-0} + 0))
 
+# Parse restore tolerance from pgcopydb log output (default: 10)
+# pgcopydb logs "within tolerance of N" or "tolerance: N" depending on success/failure
+RESTORE_TOLERANCE=$(grep -oP 'tolerance of \K[0-9]+' "$LOG" 2>/dev/null | tail -1)
+[ -z "$RESTORE_TOLERANCE" ] && RESTORE_TOLERANCE=$(grep -oP 'tolerance: \K[0-9]+' "$LOG" 2>/dev/null | tail -1)
+RESTORE_TOLERANCE=$((${RESTORE_TOLERANCE:-10} + 0))
+
 if [ "$LOG_ERRORS" -eq 0 ] && [ "$RESTORE_ERRORS" -eq 0 ]; then
     echo -e "Errors:      ${GREEN}0${NC}"
 else
     if [ "$RESTORE_ERRORS" -gt 0 ]; then
-        if [ "$RESTORE_ERRORS" -le 10 ]; then
-            echo -e "Errors:      ${GREEN}$RESTORE_ERRORS pg_restore (within tolerance)${NC}"
+        if [ "$RESTORE_ERRORS" -le "$RESTORE_TOLERANCE" ]; then
+            echo -e "Errors:      ${GREEN}$RESTORE_ERRORS pg_restore (within tolerance of $RESTORE_TOLERANCE)${NC}"
         else
-            echo -e "Errors:      ${RED}$RESTORE_ERRORS pg_restore (exceeds tolerance)${NC}"
+            echo -e "Errors:      ${RED}$RESTORE_ERRORS pg_restore (exceeds tolerance of $RESTORE_TOLERANCE)${NC}"
         fi
     fi
     if [ "$LOG_ERRORS" -gt 0 ]; then
