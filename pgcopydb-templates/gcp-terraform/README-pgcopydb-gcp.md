@@ -27,13 +27,14 @@ at boot.
 
 1. **Save both files** (`pgcopydb-migration-instance.tf` and `startup-script.sh`) in the same directory
 
-2. **Deploy**
+2. **Deploy** (restricting SSH to your IP is recommended — get it from [icanhazip.com](https://icanhazip.com)):
    ```bash
    terraform init
    terraform apply \
      -var="project_id=YOUR_PROJECT" \
      -var="vpc_name=YOUR_VPC" \
-     -var="subnet_name=YOUR_SUBNET"
+     -var="subnet_name=YOUR_SUBNET" \
+     -var="your_public_ip=$(curl -s icanhazip.com)"
    ```
 
 3. **Connect** via IAP tunnel:
@@ -51,7 +52,8 @@ at boot.
 terraform destroy \
   -var="project_id=YOUR_PROJECT" \
   -var="vpc_name=YOUR_VPC" \
-  -var="subnet_name=YOUR_SUBNET"
+  -var="subnet_name=YOUR_SUBNET" \
+  -var="your_public_ip=$(curl -s icanhazip.com)"
 ```
 
 ## Questions?
