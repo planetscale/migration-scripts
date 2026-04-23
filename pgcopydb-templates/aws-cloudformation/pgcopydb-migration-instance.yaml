@@ -173,7 +173,6 @@ Resources:
             - setup_cfn
             - install_packages
             - configure_system
-            - create_directories
             - verify_installation
         setup_cfn:
           files:
@@ -328,9 +327,12 @@ Resources:
       InstanceType: !Ref InstanceType
       KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref 'AWS::NoValue']
       IamInstanceProfile: !Ref InstanceProfile
-      SubnetId: !Ref SubnetId
-      SecurityGroupIds:
-        - !Ref SecurityGroup
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: '0'
+          SubnetId: !Ref SubnetId
+          GroupSet:
+            - !Ref SecurityGroup
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
@@ -390,7 +392,8 @@ Outputs:
     Value: !Ref SecurityGroup
 
   SSHCommand:
-    Description: SSH connection command
+    Condition: HasKeyPair
+    Description: SSH connection command (only shown when Key Pair is provided)
     Value: !Sub 'ssh -i /path/to/${KeyPairName}.pem ubuntu@${Instance.PublicIp}'
 
   EC2InstanceConnectCommand:
