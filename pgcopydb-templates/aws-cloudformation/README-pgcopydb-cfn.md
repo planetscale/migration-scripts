@@ -26,8 +26,10 @@ at boot.
 
 1. **Upload** the `pgcopydb-migration-instance.yaml` template to CloudFormation
 2. **Fill in** VPC ID, Subnet ID, instance type, and volume size
-3. **Deploy** and wait for completion (~10 minutes)
-4. **Connect** via SSM Session Manager (no SSH key needed):
+3. **Restrict SSH access** by entering your public IP in the **YourPublicIP** parameter
+   (get it from [icanhazip.com](https://icanhazip.com)). Leave blank to allow SSH from anywhere (not recommended).
+4. **Deploy** and wait for completion (~10 minutes)
+5. **Connect** via SSM Session Manager (no SSH key needed):
    ```bash
    aws ssm start-session --target INSTANCE_ID
    ```

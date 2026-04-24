@@ -27,13 +27,14 @@ at boot.
 
 1. **Save both files** (`pgcopydb-migration-instance.tf` and `user-data.sh`) in the same directory
 
-2. **Deploy**
+2. **Deploy** (restricting SSH to your IP is recommended — get it from [icanhazip.com](https://icanhazip.com)):
    ```bash
    terraform init
    terraform apply \
      -var="region=us-east-1" \
      -var="vpc_id=vpc-xxx" \
-     -var="subnet_id=subnet-xxx"
+     -var="subnet_id=subnet-xxx" \
+     -var="your_public_ip=$(curl -s icanhazip.com)"
    ```
 
 3. **Connect** via SSM Session Manager:
@@ -48,7 +49,8 @@ at boot.
 terraform destroy \
   -var="region=us-east-1" \
   -var="vpc_id=vpc-xxx" \
-  -var="subnet_id=subnet-xxx"
+  -var="subnet_id=subnet-xxx" \
+  -var="your_public_ip=$(curl -s icanhazip.com)"
 ```
 
 ## Questions?
