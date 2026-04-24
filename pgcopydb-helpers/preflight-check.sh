@@ -249,23 +249,31 @@ if [ -n "$TGT_VER" ]; then
     fi
 
     # 14. Extension compatibility
+    FILTER_EXCLUDED_EXTS=""
+    if [ -f ~/filters.ini ]; then
+        FILTER_EXCLUDED_EXTS=$(awk '/^\[exclude-extension\]/{found=1; next} /^\[/{found=0} found && /[^[:space:]]/{gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}' ~/filters.ini)
+    fi
+
     SRC_EXTS=$(src_query "SELECT extname FROM pg_extension ORDER BY extname;")
     TGT_EXTS=$(tgt_query "SELECT extname FROM pg_extension ORDER BY extname;")
     MISSING_EXTS=""
-    SRC_EXT_COUNT=0
+    CHECKED_COUNT=0
     while IFS= read -r ext; do
         [ -z "$ext" ] && continue
-        SRC_EXT_COUNT=$((SRC_EXT_COUNT + 1))
+        if printf '%s\n' "$FILTER_EXCLUDED_EXTS" | grep -qx "$ext"; then
+            continue
+        fi
+        CHECKED_COUNT=$((CHECKED_COUNT + 1))
         if ! printf '%s\n' "$TGT_EXTS" | grep -qx "$ext"; then
             MISSING_EXTS="${MISSING_EXTS:+$MISSING_EXTS, }$ext"
         fi
     done <<< "$SRC_EXTS"
     if [ -n "$MISSING_EXTS" ]; then
         fail "Extensions" "missing on target: $MISSING_EXTS"
-    elif [ "$SRC_EXT_COUNT" -gt 0 ]; then
-        pass "Extensions" "all $SRC_EXT_COUNT source extension(s) present on target"
+    elif [ "$CHECKED_COUNT" -gt 0 ]; then
+        pass "Extensions" "all $CHECKED_COUNT extension(s) present on target"
     else
-        pass "Extensions" "no extensions on source"
+        pass "Extensions" "no extensions to check"
     fi
 fi
 
