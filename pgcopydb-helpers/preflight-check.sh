@@ -247,6 +247,26 @@ if [ -n "$TGT_VER" ]; then
     else
         pass "Existing pgcopydb schema" "none"
     fi
+
+    # 14. Extension compatibility
+    SRC_EXTS=$(src_query "SELECT extname FROM pg_extension ORDER BY extname;")
+    TGT_EXTS=$(tgt_query "SELECT extname FROM pg_extension ORDER BY extname;")
+    MISSING_EXTS=""
+    SRC_EXT_COUNT=0
+    while IFS= read -r ext; do
+        [ -z "$ext" ] && continue
+        SRC_EXT_COUNT=$((SRC_EXT_COUNT + 1))
+        if ! printf '%s\n' "$TGT_EXTS" | grep -qx "$ext"; then
+            MISSING_EXTS="${MISSING_EXTS:+$MISSING_EXTS, }$ext"
+        fi
+    done <<< "$SRC_EXTS"
+    if [ -n "$MISSING_EXTS" ]; then
+        fail "Extensions" "missing on target: $MISSING_EXTS"
+    elif [ "$SRC_EXT_COUNT" -gt 0 ]; then
+        pass "Extensions" "all $SRC_EXT_COUNT source extension(s) present on target"
+    else
+        pass "Extensions" "no extensions on source"
+    fi
 fi
 
 # ── MIGRATION INSTANCE ─────────────────────────────────────────────
