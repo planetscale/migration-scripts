@@ -176,17 +176,11 @@ When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 M
 
 1. **Stop writes** to the source database (maintenance mode, read-only, connection drain, etc.).
 
-2. **Get the current WAL position** on the source:
+2. **Set the CDC endpoint** — the script fetches the current WAL LSN from the source, displays it, and asks for confirmation before applying:
 
    ```bash
-   psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
-   ```
-
-3. **Set the CDC endpoint** so pgcopydb stops after reaching that position:
-
-   ```bash
-   ~/stop-cdc.sh <LSN>
-   MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh <LSN>  # explicit dir
+   ~/stop-cdc.sh
+   MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
    ```
 
 4. **Wait** for pgcopydb to apply all remaining changes and exit. Monitor with `check-cdc-status.sh`.

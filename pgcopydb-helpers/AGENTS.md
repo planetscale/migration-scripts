@@ -308,26 +308,21 @@ Cleans up pgcopydb replication artifacts on both source and target databases.
 
 #### `stop-cdc.sh`
 
-Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover.
+Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover. The script fetches the current WAL LSN from the source automatically, displays it, and prompts for confirmation before writing it to the sentinel.
 
 ```bash
-# Get the current source LSN
-psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
-
-# Set the endpoint
-~/stop-cdc.sh 41EBA/7C7A1AD8
-MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh 41EBA/7C7A1AD8  # explicit dir
+~/stop-cdc.sh
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
 ```
 
 **Cutover procedure:**
 1. Stop writes to the source database (maintenance mode, read-only, etc.)
-2. Get the current WAL LSN from the source
-3. Run `stop-cdc.sh` with that LSN
-4. Wait for `check-cdc-status.sh` to show the apply LSN has reached the endpoint
-5. pgcopydb exits cleanly
-6. Verify data on the target
-7. Switch application to the target
-8. Run `drop-replication-slots.sh` to clean up
+2. Run `stop-cdc.sh` — it fetches the current WAL LSN, shows it, and asks you to confirm
+3. Wait for `check-cdc-status.sh` to show the apply LSN has reached the endpoint
+4. pgcopydb exits cleanly
+5. Verify data on the target
+6. Switch application to the target
+7. Run `drop-replication-slots.sh` to clean up
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
@@ -430,7 +425,7 @@ sqlite3 ~/migration_*/schema/filter.db \
 
 3. CUTOVER (when CDC is caught up)
    - Stop writes to source
-   - Run ~/stop-cdc.sh <LSN> to set the endpoint
+   - Run ~/stop-cdc.sh — to set the endpoint
    - Wait for pgcopydb to finish applying and exit
    - Verify data on target
    - Switch application to target
