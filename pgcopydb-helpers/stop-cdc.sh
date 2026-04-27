@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Usage: ~/stop-cdc.sh <LSN>
-# Example: ~/stop-cdc.sh 41EBA/7C7A1AD8
-# Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh 41EBA/7C7A1AD8
+# Usage: ~/stop-cdc.sh
+# Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh
 #
-# Sets the CDC endpos sentinel so pgcopydb stops streaming
-# after reaching the given LSN. Uses MIGRATION_DIR env var if set,
+# Fetches the current WAL LSN from the source, asks for confirmation,
+# then sets the CDC endpos sentinel so pgcopydb stops streaming after
+# reaching that LSN. Uses MIGRATION_DIR env var if set,
 # otherwise the most recent ~/migration_*/ directory.
 # Use the sqlite3 method (more reliable than the pgcopydb CLI sentinel command).
 
@@ -23,23 +23,29 @@ if [ -z "${PGCOPYDB_SOURCE_PGURI:-}" ] || [ -z "${PGCOPYDB_TARGET_PGURI:-}" ]; t
 fi
 # --- loaded ---
 
-if [ -z "${1:-}" ]; then
-    echo "Usage: $0 <LSN>"
-    echo "Example: $0 41EBA/7C7A1AD8"
-    echo ""
-    echo "Get current source LSN with:"
-    echo "  psql \"\$PGCOPYDB_SOURCE_PGURI\" -t -A -c \"SELECT pg_current_wal_lsn();\""
+echo "Fetching current WAL LSN from source..."
+ENDPOS_LSN=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();" 2>&1)
+if [ $? -ne 0 ] || [ -z "$ENDPOS_LSN" ]; then
+    echo "ERROR: Failed to fetch LSN from source database:"
+    echo "  $ENDPOS_LSN"
     exit 1
 fi
 
-ENDPOS_LSN="$1"
+echo ""
+echo "Current source LSN: $ENDPOS_LSN"
+echo ""
+read -r -p "Stop CDC at this LSN? [y/N] " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 0
+fi
 
 # Find the most recent migration directory
 MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 
 if [ -z "$MIGRATION_DIR" ] || [ ! -d "$MIGRATION_DIR" ]; then
-    echo "ERROR: No migration directory found. Pass the path as second argument:"
-    echo "  $0 <LSN> ~/migration_YYYYMMDD-HHMMSS"
+    echo "ERROR: No migration directory found. Set MIGRATION_DIR explicitly:"
+    echo "  MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS $0"
     exit 1
 fi
 
