@@ -86,7 +86,7 @@ Validates all migration prerequisites before starting `pgcopydb clone --follow`.
 
 **Checks performed:**
 - **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, prepared transactions
-- **Target:** connectivity, replication permission, leftover pgcopydb schema
+- **Target:** connectivity, replication permission, leftover pgcopydb schema, extension compatibility (FAILs if any source extension is absent on target — add missing ones to `[exclude-extension]` in `filters.ini` if the exclusion is intentional)
 - **Instance:** `~/filters.ini` exists, pgcopydb binary on PATH
 
 **When to use:** Before every migration attempt. Run after setting up `~/.env` and `~/filters.ini` but before `~/start-migration-screen.sh`. Fix all FAILs before proceeding. Review WARNs — especially `wal_sender_timeout` (should be `0` for large migrations) and leftover state from previous attempts.
