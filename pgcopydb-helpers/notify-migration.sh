@@ -63,6 +63,11 @@ done
 
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 
+# ── Parse PlanetScale branch ID ────────────────────────────────────
+# Username format in connection string: pscale_api_xxx.BRANCH_ID
+_u="${PGCOPYDB_TARGET_PGURI:-}"; _u="${_u#*://}"; _u="${_u%%@*}"; _u="${_u%%:*}"
+PS_BRANCH_ID="${_u##*.}"; unset _u
+
 # ── Slack helper ───────────────────────────────────────────────────
 slack_send() {
     local text="$1"
@@ -119,8 +124,8 @@ if [ "$ACTION" = "setup" ]; then
     echo "Cron job installed (every ${INTERVAL} min):"
     echo "  $CRON_LINE"
     echo ""
-    echo "Sending test message..."
-    "$SCRIPT" --test
+    echo "Sending setup confirmation to Slack..."
+    slack_send ":rocket: Migration monitor started for branch *${PS_BRANCH_ID:-unknown}* — Slack notifications active"
     exit 0
 fi
 
@@ -165,8 +170,6 @@ if [ -f "$STATE" ]; then
 fi
 
 # ── Current state from log ─────────────────────────────────────────
-HOST=$(hostname -s 2>/dev/null || hostname)
-
 PROC_RUNNING=false
 if ps aux | grep -q "[p]gcopydb.*clone"; then
     PROC_RUNNING=true
@@ -223,7 +226,7 @@ if [ "$INITIAL_COPY_DONE" = true ] && [ "$LAST_INITIAL_COPY_NOTIFIED" = "false" 
     SECS=$(( $(date +%s) - DIR_EPOCH ))
     RUNTIME=$(printf "%dh %02dm" $(( SECS/3600 )) $(( (SECS%3600)/60 )))
     msg=":large_blue_circle: *Initial copy completed — CDC phase starting*"
-    msg+=$'\n'"Host: *${HOST}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
+    msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
     msg+=$'\n'"Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Indexes: ${INDEXES_DONE}/${INDEXES_TOTAL} | Constraints: ${CONSTRAINTS_DONE}/${CONSTRAINTS_TOTAL}"
     slack_send "$msg"
     NOTIFIED_INITIAL_COPY="true"
@@ -233,7 +236,7 @@ elif [ "$CURRENT_STATUS" = "succeeded" ] && [ "$LAST_COMPLETION_NOTIFIED" = "fal
     SECS=$(( $(date +%s) - DIR_EPOCH ))
     RUNTIME=$(printf "%dh %02dm" $(( SECS/3600 )) $(( (SECS%3600)/60 )))
     msg=":white_check_mark: *Migration completed successfully*"
-    msg+=$'\n'"Host: *${HOST}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
+    msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
     msg+=$'\n'"Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Dir: ${MIGRATION_DIR}"
     slack_send "$msg"
     NOTIFIED_COMPLETION="true"
@@ -241,7 +244,7 @@ elif [ "$CURRENT_STATUS" = "succeeded" ] && [ "$LAST_COMPLETION_NOTIFIED" = "fal
 elif [ "$CURRENT_STATUS" = "failed" ] && [ "$LAST_COMPLETION_NOTIFIED" = "false" ]; then
     LAST_ERR=$(grep " ERROR " "$LOG" 2>/dev/null | tail -1 | cut -c1-120 || true)
     msg=":red_circle: *Migration FAILED*"
-    msg+=$'\n'"Host: *${HOST}* | Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Data: ${GB} GB"
+    msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Data: ${GB} GB"
     [ -n "$LAST_ERR" ] && msg+=$'\n'"Last error: ${LAST_ERR}"
     msg+=$'\n'"Dir: ${MIGRATION_DIR}"
     slack_send "$msg"
@@ -250,7 +253,7 @@ elif [ "$CURRENT_STATUS" = "failed" ] && [ "$LAST_COMPLETION_NOTIFIED" = "false"
 elif [ "$CURRENT_STATUS" = "stopped" ] && [ "$LAST_STATUS" = "running" ]; then
     LAST_ERR=$(grep " ERROR " "$LOG" 2>/dev/null | tail -1 | cut -c1-120 || true)
     msg=":warning: *Migration process stopped unexpectedly*"
-    msg+=$'\n'"Host: *${HOST}* | Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Data: ${GB} GB"
+    msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Data: ${GB} GB"
     [ -n "$LAST_ERR" ] && msg+=$'\n'"Last error: ${LAST_ERR}"
     msg+=$'\n'"Run: tail -50 ${LOG}"
     slack_send "$msg"
@@ -259,7 +262,7 @@ elif [ "$CURRENT_ERROR_COUNT" -gt "$LAST_ERROR_COUNT" ]; then
     NEW_COUNT=$(( CURRENT_ERROR_COUNT - LAST_ERROR_COUNT ))
     LAST_ERR=$(grep " ERROR " "$LOG" 2>/dev/null | tail -1 | cut -c1-120 || true)
     msg=":warning: *${NEW_COUNT} new error(s) in migration log*"
-    msg+=$'\n'"Host: *${HOST}* | Total errors: ${CURRENT_ERROR_COUNT} | Tables: ${TABLES_DONE}/${TABLES_TOTAL}"
+    msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Total errors: ${CURRENT_ERROR_COUNT} | Tables: ${TABLES_DONE}/${TABLES_TOTAL}"
     [ -n "$LAST_ERR" ] && msg+=$'\n'"Last: ${LAST_ERR}"
     slack_send "$msg"
 fi
