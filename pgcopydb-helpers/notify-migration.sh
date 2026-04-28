@@ -22,6 +22,7 @@
 # ALERTS FIRED
 #   - pgcopydb process stopped unexpectedly (fires once per transition)
 #   - New ERROR lines in migration.log (fires once per new batch)
+#   - Initial copy completed (data + indexes + constraints + post-data; fires once)
 #   - Migration completed successfully (fires once)
 #   - Migration failed with non-zero exit code (fires once)
 #
@@ -155,6 +156,7 @@ fi
 # a new migration starts (new directory = no state file).
 LAST_ERROR_COUNT=0
 LAST_STATUS="unknown"
+LAST_INITIAL_COPY_NOTIFIED="false"
 LAST_COMPLETION_NOTIFIED="false"
 
 if [ -f "$STATE" ]; then
@@ -172,6 +174,11 @@ fi
 
 MIGRATION_SUCCEEDED=false
 MIGRATION_FAILED=false
+
+INITIAL_COPY_DONE=false
+if grep -q "All step are now done" "$LOG" 2>/dev/null; then
+    INITIAL_COPY_DONE=true
+fi
 
 if grep -q "Migration SUCCEEDED" "$LOG" 2>/dev/null; then
     MIGRATION_SUCCEEDED=true
@@ -202,11 +209,26 @@ SPLIT_PARTS=$(db_query "SELECT COUNT(*) FROM s_table_part;")
 TABLES_TOTAL=$(( NONSPLIT + SPLIT_PARTS ))
 BYTES=$(db_query "SELECT COALESCE(SUM(bytes),0) FROM summary WHERE tableoid IS NOT NULL;")
 GB=$(echo "scale=1; $BYTES / 1024 / 1024 / 1024" | bc 2>/dev/null || echo "0")
+INDEXES_DONE=$(db_query "SELECT COUNT(DISTINCT indexoid) FROM summary WHERE indexoid IS NOT NULL AND done_time_epoch IS NOT NULL;")
+INDEXES_TOTAL=$(db_query "SELECT COUNT(*) FROM s_index;")
+CONSTRAINTS_DONE=$(db_query "SELECT COUNT(DISTINCT conoid) FROM summary WHERE conoid IS NOT NULL AND done_time_epoch IS NOT NULL;")
+CONSTRAINTS_TOTAL=$(db_query "SELECT COUNT(*) FROM s_constraint;")
 
 # ── Evaluate and notify ────────────────────────────────────────────
+NOTIFIED_INITIAL_COPY="$LAST_INITIAL_COPY_NOTIFIED"
 NOTIFIED_COMPLETION="$LAST_COMPLETION_NOTIFIED"
 
-if [ "$CURRENT_STATUS" = "succeeded" ] && [ "$LAST_COMPLETION_NOTIFIED" = "false" ]; then
+if [ "$INITIAL_COPY_DONE" = true ] && [ "$LAST_INITIAL_COPY_NOTIFIED" = "false" ]; then
+    DIR_EPOCH=$(stat -c %Y "$MIGRATION_DIR" 2>/dev/null || date +%s)
+    SECS=$(( $(date +%s) - DIR_EPOCH ))
+    RUNTIME=$(printf "%dh %02dm" $(( SECS/3600 )) $(( (SECS%3600)/60 )))
+    msg=":large_blue_circle: *Initial copy completed — CDC phase starting*"
+    msg+=$'\n'"Host: *${HOST}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
+    msg+=$'\n'"Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Indexes: ${INDEXES_DONE}/${INDEXES_TOTAL} | Constraints: ${CONSTRAINTS_DONE}/${CONSTRAINTS_TOTAL}"
+    slack_send "$msg"
+    NOTIFIED_INITIAL_COPY="true"
+
+elif [ "$CURRENT_STATUS" = "succeeded" ] && [ "$LAST_COMPLETION_NOTIFIED" = "false" ]; then
     DIR_EPOCH=$(stat -c %Y "$MIGRATION_DIR" 2>/dev/null || date +%s)
     SECS=$(( $(date +%s) - DIR_EPOCH ))
     RUNTIME=$(printf "%dh %02dm" $(( SECS/3600 )) $(( (SECS%3600)/60 )))
@@ -246,5 +268,6 @@ fi
 cat > "$STATE" <<EOF
 LAST_ERROR_COUNT=${CURRENT_ERROR_COUNT}
 LAST_STATUS=${CURRENT_STATUS}
+LAST_INITIAL_COPY_NOTIFIED=${NOTIFIED_INITIAL_COPY}
 LAST_COMPLETION_NOTIFIED=${NOTIFIED_COMPLETION}
 EOF
