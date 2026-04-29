@@ -87,6 +87,10 @@ WHERE n.nspname NOT IN ('pg_catalog','information_schema','pscale_extensions')
   AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e');"
 
 psql "$PGCOPYDB_TARGET_PGURI" --no-align -t -c "
+SELECT 'Publications:       ' || count(*)
+FROM pg_publication;"
+
+psql "$PGCOPYDB_TARGET_PGURI" --no-align -t -c "
 SELECT 'Extensions:         ' || count(*)
 FROM pg_extension WHERE extname != 'plpgsql';"
 
