@@ -393,12 +393,12 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `compare-pg-params.sh` | Prepare | Compare PostgreSQL parameters between source and target |
 | `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots) |
 | `fix-replica-identity.sh` | Prepare | Set REPLICA IDENTITY FULL on tables without primary keys |
-| `notify-migration.sh` | Monitor | Slack alerts via cron (auto-started by `start-migration-screen.sh`). Fires once per event: process stopped, new errors, initial copy completed, migration succeeded/failed. Requires `SLACK_WEBHOOK_URL` in `~/.env`. Use `--test` to verify the webhook, `--uninstall` to remove the cron job. |
 | `filters.ini` | Prepare | pgcopydb filter configuration |
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
 | `start-migration-screen.sh` | Migrate | Run the migration in a detached screen session. Automatically starts Slack monitoring unless `--no-monitor` is passed. |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
+| `notify-migration.sh` | Monitor | Slack alerts via cron (auto-started by `start-migration-screen.sh`)|
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
 | `resume-cdc.sh` | Recovery | Resume only the CDC phase (skips clone) |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |

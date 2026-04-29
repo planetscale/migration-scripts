@@ -6,17 +6,14 @@
 # automatically when a new migration starts. Each unique event fires once only.
 #
 # SETUP
-#   1. Add to ~/.env:
-#        export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'
-#
-#   2. Test the webhook:
+#   1. Test the webhook:
 #        ~/notify-migration.sh --test
 #
-#   3. Install the cron job (default 2 min interval):
+#   2. Install the cron job (default 2 min interval):
 #        ~/notify-migration.sh --setup
 #        ~/notify-migration.sh --setup --interval 5
 #
-#   4. Remove the cron job when done:
+#   3. Remove the cron job when done:
 #        ~/notify-migration.sh --uninstall
 #
 # ALERTS FIRED
@@ -61,7 +58,7 @@ done
  set +a
  set -u
 
-SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
+SLACK_WEBHOOK_URL='https://hooks.slack.com/services/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'
 
 # ── Parse PlanetScale branch ID ────────────────────────────────────
 # Username format in connection string: pscale_api_xxx.BRANCH_ID

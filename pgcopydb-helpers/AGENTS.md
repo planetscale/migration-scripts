@@ -192,7 +192,7 @@ Wrapper that runs `run-migration.sh` inside a detached `screen` session named "m
 
 #### `notify-migration.sh`
 
-Sends Slack alerts for migration events. Runs from cron (default every 2 min) and fires each alert exactly once. Started automatically by `start-migration-screen.sh` — no manual setup required if `SLACK_WEBHOOK_URL` is set in `~/.env`.
+Sends Slack alerts for migration events. Runs from cron (default every 2 min) and fires each alert exactly once. Started automatically by `start-migration-screen.sh`.
 
 ```bash
 ~/notify-migration.sh --test         # send a test message to verify the webhook
@@ -211,7 +211,7 @@ All alerts include the PlanetScale branch ID (parsed from `PGCOPYDB_TARGET_PGURI
 
 **State file:** `$MIGRATION_DIR/.notify-state` — resets automatically when a new migration directory is created.
 
-**Requires:** `SLACK_WEBHOOK_URL` in `~/.env`. If not set, the script skips silently (cron) or exits with an error (`--setup`, `--test`).
+**Webhook:** hardcoded in the script
 
 ---
 
