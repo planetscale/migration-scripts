@@ -172,10 +172,11 @@ Starts a full `pgcopydb clone --follow` migration. Creates a new timestamped dir
 
 #### `start-migration-screen.sh`
 
-Wrapper that runs `run-migration.sh` inside a detached `screen` session named "migration". Kills any existing migration screen first.
+Wrapper that runs `run-migration.sh` inside a detached `screen` session named "migration". Kills any existing migration screen first. Automatically installs the Slack monitoring cron job via `notify-migration.sh --setup` unless `--no-monitor` is passed.
 
 ```bash
-~/start-migration-screen.sh
+~/start-migration-screen.sh             # start migration + enable Slack monitoring
+~/start-migration-screen.sh --no-monitor  # start migration without monitoring
 ```
 
 **When to use:** Always use this instead of running `run-migration.sh` directly. Screen prevents the migration from dying if your SSH session disconnects.
@@ -188,6 +189,31 @@ Wrapper that runs `run-migration.sh` inside a detached `screen` session named "m
 ---
 
 ### Monitoring
+
+#### `notify-migration.sh`
+
+Sends Slack alerts for migration events. Runs from cron (default every 2 min) and fires each alert exactly once. Started automatically by `start-migration-screen.sh`.
+
+```bash
+~/notify-migration.sh --test         # send a test message to verify the webhook
+~/notify-migration.sh --uninstall    # remove the cron job
+~/notify-migration.sh --setup --interval N  # reinstall with a different interval (1-59 min)
+```
+
+**Alerts fired:**
+- Process stopped unexpectedly (fires once per running→stopped transition)
+- New ERROR lines in `migration.log` (fires once per new batch)
+- Initial copy completed — data, indexes, constraints, sequences, and post-data done; CDC phase is starting (fires once)
+- Migration completed successfully (fires once)
+- Migration failed with non-zero exit code (fires once)
+
+All alerts include the PlanetScale branch ID (parsed from `PGCOPYDB_TARGET_PGURI`) and migration progress context (tables, data GB, runtime).
+
+**State file:** `$MIGRATION_DIR/.notify-state` — resets automatically when a new migration directory is created.
+
+**Webhook:** hardcoded in the script
+
+---
 
 #### `check-migration-status.sh`
 
@@ -424,7 +450,7 @@ sqlite3 ~/migration_*/schema/filter.db \
    - Run ~/fix-replica-identity.sh if using CDC (--follow)
 
 2. MIGRATE
-   - Run ~/start-migration-screen.sh to begin
+   - Run ~/start-migration-screen.sh to begin (Slack monitoring starts automatically)
    - Monitor with ~/check-migration-status.sh (initial copy phase)
    - Monitor with ~/check-cdc-status.sh (CDC catch-up phase)
 
