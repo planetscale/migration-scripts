@@ -58,7 +58,7 @@ done
  set +a
  set -u
 
-SLACK_WEBHOOK_URL='https://hooks.slack.com/services/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'
+SLACK_WEBHOOK_URL='https://hooks.zapier.com/hooks/catch/27424474/uvzt3ci/'
 
 # ── Parse PlanetScale branch ID ────────────────────────────────────
 # Username format in connection string: pscale_api_xxx.BRANCH_ID
