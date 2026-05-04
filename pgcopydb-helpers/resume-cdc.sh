@@ -38,7 +38,7 @@ fi
 
 echo "Resuming CDC in: $MIGRATION_DIR"
 
-LOGFILE=$MIGRATION_DIR/resume-cdc-$(date +%Y%m%d-%H%M%S).log
+LOGFILE=$MIGRATION_DIR/migration.log
 FILTER_FILE=~/filters.ini
 TABLE_JOBS=16
 
