@@ -105,6 +105,7 @@ SELECT pg_reload_conf();
    ```bash
    export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
    export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
+   export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
    ```
 
 3. **Customize `~/filters.ini`** to exclude schemas, tables, and extensions that should not be migrated. See [Filter Configuration](#filter-configuration) below.
@@ -171,6 +172,13 @@ Once the initial copy completes and CDC is streaming, check replication progress
 ```
 
 When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 MB), you are ready for cutover.
+
+To receive Slack alerts for migration events (errors, initial copy completion, success/failure), set up the monitor separately. Requires `SLACK_WEBHOOK_URL` in `~/.env`:
+
+```bash
+~/slack-migration-alerts.sh --test    # verify webhook before installing
+~/slack-migration-alerts.sh --setup   # install cron job (default every 2 min)
+```
 
 ### 4. Cut Over
 
@@ -395,9 +403,10 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `fix-replica-identity.sh` | Prepare | Set REPLICA IDENTITY FULL on tables without primary keys |
 | `filters.ini` | Prepare | pgcopydb filter configuration |
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
-| `start-migration-screen.sh` | Migrate | Run the migration in a screen session |
+| `start-migration-screen.sh` | Migrate | Run the migration in a detached screen session. |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
+| `slack-migration-alerts.sh` | Monitor | Slack alerts |
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
 | `resume-cdc.sh` | Recovery | Resume only the CDC phase (skips clone) |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
