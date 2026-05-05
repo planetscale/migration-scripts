@@ -1,20 +1,23 @@
 #!/bin/bash
 #
-# notify-migration.sh — Slack alerts for pgcopydb migration failures and errors
+# slack-migration-alerts.sh — Slack alerts for pgcopydb migration failures and errors
 #
 # Runs from cron. State is stored inside the migration directory so it resets
 # automatically when a new migration starts. Each unique event fires once only.
 #
 # SETUP
+#   0. Add SLACK_WEBHOOK_URL to ~/.env:
+#        export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'
+#
 #   1. Test the webhook:
-#        ~/notify-migration.sh --test
+#        ~/slack-migration-alerts.sh --test
 #
 #   2. Install the cron job (default 2 min interval):
-#        ~/notify-migration.sh --setup
-#        ~/notify-migration.sh --setup --interval 5
+#        ~/slack-migration-alerts.sh --setup
+#        ~/slack-migration-alerts.sh --setup --interval 5
 #
 #   3. Remove the cron job when done:
-#        ~/notify-migration.sh --uninstall
+#        ~/slack-migration-alerts.sh --uninstall
 #
 # ALERTS FIRED
 #   - pgcopydb process stopped unexpectedly (fires once per transition)
@@ -58,8 +61,6 @@ done
  set +a
  set -u
 
-SLACK_WEBHOOK_URL='https://hooks.zapier.com/hooks/catch/27424474/uvzt3ci/'
-
 # ── Parse PlanetScale branch ID ────────────────────────────────────
 # Username format in connection string: pscale_api_xxx.BRANCH_ID
 _u="${PGCOPYDB_TARGET_PGURI:-}"; _u="${_u#*://}"; _u="${_u%%@*}"; _u="${_u%%:*}"
@@ -83,7 +84,8 @@ slack_send() {
     if [ "$http_code" = "200" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') SENT: $text"
     else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') WARN: Slack returned HTTP $http_code"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: Slack returned HTTP $http_code" >&2
+        return 1
     fi
 }
 
@@ -94,47 +96,49 @@ db_query() {
 
 # ── --test ─────────────────────────────────────────────────────────
 if [ "$ACTION" = "test" ]; then
-    if [ -z "$SLACK_WEBHOOK_URL" ]; then
-        echo "ERROR: SLACK_WEBHOOK_URL not set in ~/.env"
+    if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+        echo "ERROR: SLACK_WEBHOOK_URL is not set in ~/.env"
         exit 1
     fi
     HOST=$(hostname -s 2>/dev/null || hostname)
-    slack_send ":white_check_mark: Migration Monitor test from *${HOST}* — webhook working!"
+    slack_send ":white_check_mark: Migration Monitor test from *${HOST}* — webhook working!" || exit 1
     exit 0
 fi
 
 # ── --setup ────────────────────────────────────────────────────────
 if [ "$ACTION" = "setup" ]; then
-    if [ -z "$SLACK_WEBHOOK_URL" ]; then
-        echo "ERROR: Set SLACK_WEBHOOK_URL in ~/.env before running --setup"
+    if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+        echo "ERROR: SLACK_WEBHOOK_URL is not set in ~/.env"
         exit 1
     fi
     if ! [[ "$INTERVAL" =~ ^[1-9][0-9]?$ ]] || [ "$INTERVAL" -gt 59 ]; then
         echo "ERROR: --interval must be 1-59 (got: $INTERVAL)"
         exit 1
     fi
-    SCRIPT="$HOME/notify-migration.sh"
+    echo "Verifying webhook..."
+    slack_send ":rocket: Migration monitor started for branch *${PS_BRANCH_ID:-unknown}* — Slack notifications active" || {
+        echo "ERROR: Webhook verification failed — cron job not installed" >&2
+        exit 1
+    }
+    SCRIPT="$HOME/slack-migration-alerts.sh"
     CRON_LINE="*/${INTERVAL} * * * * ${SCRIPT} > /dev/null 2>&1"
-    ( crontab -l 2>/dev/null | grep -v "notify-migration.sh" || true
+    ( crontab -l 2>/dev/null | grep -v "notify-migration.sh" | grep -v "slack-migration-alerts.sh" || true
       echo "$CRON_LINE"
     ) | crontab -
     echo "Cron job installed (every ${INTERVAL} min):"
     echo "  $CRON_LINE"
-    echo ""
-    echo "Sending setup confirmation to Slack..."
-    slack_send ":rocket: Migration monitor started for branch *${PS_BRANCH_ID:-unknown}* — Slack notifications active"
     exit 0
 fi
 
 # ── --uninstall ────────────────────────────────────────────────────
 if [ "$ACTION" = "uninstall" ]; then
-    ( crontab -l 2>/dev/null | grep -v "notify-migration.sh" || true ) | crontab -
+    ( crontab -l 2>/dev/null | grep -v "notify-migration.sh" | grep -v "slack-migration-alerts.sh" || true ) | crontab -
     echo "Cron job removed."
     exit 0
 fi
 
 # ── Guard ──────────────────────────────────────────────────────────
-if [ -z "$SLACK_WEBHOOK_URL" ]; then
+if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') SKIP: SLACK_WEBHOOK_URL not set in ~/.env"
     exit 0
 fi
@@ -225,8 +229,9 @@ if [ "$INITIAL_COPY_DONE" = true ] && [ "$LAST_INITIAL_COPY_NOTIFIED" = "false" 
     msg=":large_blue_circle: *Initial copy completed — CDC phase starting*"
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
     msg+=$'\n'"Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Indexes: ${INDEXES_DONE}/${INDEXES_TOTAL} | Constraints: ${CONSTRAINTS_DONE}/${CONSTRAINTS_TOTAL}"
-    slack_send "$msg"
-    NOTIFIED_INITIAL_COPY="true"
+    if slack_send "$msg"; then
+        NOTIFIED_INITIAL_COPY="true"
+    fi
 
 elif [ "$CURRENT_STATUS" = "succeeded" ] && [ "$LAST_COMPLETION_NOTIFIED" = "false" ]; then
     DIR_EPOCH=$(stat -c %Y "$MIGRATION_DIR" 2>/dev/null || date +%s)
@@ -235,33 +240,30 @@ elif [ "$CURRENT_STATUS" = "succeeded" ] && [ "$LAST_COMPLETION_NOTIFIED" = "fal
     msg=":white_check_mark: *Migration completed successfully*"
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
     msg+=$'\n'"Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Dir: ${MIGRATION_DIR}"
-    slack_send "$msg"
-    NOTIFIED_COMPLETION="true"
+    if slack_send "$msg"; then
+        NOTIFIED_COMPLETION="true"
+    fi
 
 elif [ "$CURRENT_STATUS" = "failed" ] && [ "$LAST_COMPLETION_NOTIFIED" = "false" ]; then
-    LAST_ERR=$(grep " ERROR " "$LOG" 2>/dev/null | tail -1 | cut -c1-120 || true)
     msg=":red_circle: *Migration FAILED*"
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Data: ${GB} GB"
-    [ -n "$LAST_ERR" ] && msg+=$'\n'"Last error: ${LAST_ERR}"
+    msg+=$'\n'"Check migration.log for error details"
     msg+=$'\n'"Dir: ${MIGRATION_DIR}"
-    slack_send "$msg"
-    NOTIFIED_COMPLETION="true"
+    if slack_send "$msg"; then
+        NOTIFIED_COMPLETION="true"
+    fi
 
 elif [ "$CURRENT_STATUS" = "stopped" ] && [ "$LAST_STATUS" = "running" ]; then
-    LAST_ERR=$(grep " ERROR " "$LOG" 2>/dev/null | tail -1 | cut -c1-120 || true)
     msg=":warning: *Migration process stopped unexpectedly*"
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Data: ${GB} GB"
-    [ -n "$LAST_ERR" ] && msg+=$'\n'"Last error: ${LAST_ERR}"
     msg+=$'\n'"Run: tail -50 ${LOG}"
-    slack_send "$msg"
+    slack_send "$msg" || true
 
 elif [ "$CURRENT_ERROR_COUNT" -gt "$LAST_ERROR_COUNT" ]; then
     NEW_COUNT=$(( CURRENT_ERROR_COUNT - LAST_ERROR_COUNT ))
-    LAST_ERR=$(grep " ERROR " "$LOG" 2>/dev/null | tail -1 | cut -c1-120 || true)
     msg=":warning: *${NEW_COUNT} new error(s) in migration log*"
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Total errors: ${CURRENT_ERROR_COUNT} | Tables: ${TABLES_DONE}/${TABLES_TOTAL}"
-    [ -n "$LAST_ERR" ] && msg+=$'\n'"Last: ${LAST_ERR}"
-    slack_send "$msg"
+    slack_send "$msg" || true
 fi
 
 # ── Save state ─────────────────────────────────────────────────────

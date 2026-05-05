@@ -11,6 +11,7 @@ All scripts read connection strings from `~/.env`:
 ```bash
 export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
 export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
+export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
 ```
 
 ## Script Reference
@@ -172,11 +173,10 @@ Starts a full `pgcopydb clone --follow` migration. Creates a new timestamped dir
 
 #### `start-migration-screen.sh`
 
-Wrapper that runs `run-migration.sh` inside a detached `screen` session named "migration". Kills any existing migration screen first. Automatically installs the Slack monitoring cron job via `notify-migration.sh --setup` unless `--no-monitor` is passed.
+Wrapper that runs `run-migration.sh` inside a detached `screen` session named "migration". Kills any existing migration screen first.
 
 ```bash
-~/start-migration-screen.sh             # start migration + enable Slack monitoring
-~/start-migration-screen.sh --no-monitor  # start migration without monitoring
+~/start-migration-screen.sh
 ```
 
 **When to use:** Always use this instead of running `run-migration.sh` directly. Screen prevents the migration from dying if your SSH session disconnects.
@@ -190,14 +190,15 @@ Wrapper that runs `run-migration.sh` inside a detached `screen` session named "m
 
 ### Monitoring
 
-#### `notify-migration.sh`
+#### `slack-migration-alerts.sh`
 
-Sends Slack alerts for migration events. Runs from cron (default every 2 min) and fires each alert exactly once. Started automatically by `start-migration-screen.sh`.
+Sends Slack alerts for migration events. Runs from cron (default every 2 min) and fires each alert exactly once. Requires `SLACK_WEBHOOK_URL` in `~/.env`.
 
 ```bash
-~/notify-migration.sh --test         # send a test message to verify the webhook
-~/notify-migration.sh --uninstall    # remove the cron job
-~/notify-migration.sh --setup --interval N  # reinstall with a different interval (1-59 min)
+~/slack-migration-alerts.sh --test         # send a test message to verify the webhook
+~/slack-migration-alerts.sh --setup        # install cron job (default every 2 min)
+~/slack-migration-alerts.sh --setup --interval N  # custom interval (1-59 min)
+~/slack-migration-alerts.sh --uninstall    # remove the cron job
 ```
 
 **Alerts fired:**
@@ -207,11 +208,11 @@ Sends Slack alerts for migration events. Runs from cron (default every 2 min) an
 - Migration completed successfully (fires once)
 - Migration failed with non-zero exit code (fires once)
 
-All alerts include the PlanetScale branch ID (parsed from `PGCOPYDB_TARGET_PGURI`) and migration progress context (tables, data GB, runtime).
+All alerts include the PlanetScale branch ID (parsed from `PGCOPYDB_TARGET_PGURI`) and migration progress context (tables, data GB, runtime). Alert messages do not include raw log content.
 
 **State file:** `$MIGRATION_DIR/.notify-state` — resets automatically when a new migration directory is created.
 
-**Webhook:** hardcoded in the script
+**Webhook:** set `SLACK_WEBHOOK_URL` in `~/.env`
 
 ---
 
@@ -450,9 +451,10 @@ sqlite3 ~/migration_*/schema/filter.db \
    - Run ~/fix-replica-identity.sh if using CDC (--follow)
 
 2. MIGRATE
-   - Run ~/start-migration-screen.sh to begin (Slack monitoring starts automatically)
+   - Run ~/start-migration-screen.sh to begin
    - Monitor with ~/check-migration-status.sh (initial copy phase)
    - Monitor with ~/check-cdc-status.sh (CDC catch-up phase)
+   - Run ~/slack-migration-alerts.sh --setup to enable Slack alerts (optional)
 
 3. CUTOVER (when CDC is caught up)
    - Stop writes to source
