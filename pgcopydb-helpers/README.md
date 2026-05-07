@@ -22,6 +22,9 @@ GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO migration_user;
 
 -- For future tables created before migration starts
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO migration_user;
+
+-- Prevent idle replication connection from being dropped during long COPY phases
+ALTER ROLE migration_user SET wal_sender_timeout = 0;
 ```
 
 Repeat the `GRANT USAGE`, `GRANT SELECT`, and `ALTER DEFAULT PRIVILEGES` statements for each schema being migrated.
@@ -73,13 +76,6 @@ You can verify logical replication is enabled on any platform with:
 
 ```sql
 SHOW wal_level;  -- should return 'logical'
-```
-
-**`wal_sender_timeout`:** Set this to `0` on the source to prevent the replication slot from being dropped during long COPY phases. The initial data copy can take hours on large databases, and the default timeout (60s) may cause PostgreSQL to drop the idle replication connection before CDC streaming begins.
-
-```sql
-ALTER SYSTEM SET wal_sender_timeout = 0;
-SELECT pg_reload_conf();
 ```
 
 ### Target Database (PlanetScale)
