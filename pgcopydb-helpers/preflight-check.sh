@@ -255,7 +255,7 @@ if [ -n "$TGT_VER" ]; then
     fi
 
     SRC_EXTS=$(src_query "SELECT extname FROM pg_extension ORDER BY extname;")
-    TGT_EXTS=$(tgt_query "SELECT extname FROM pg_extension ORDER BY extname;")
+    TGT_AVAIL_EXTS=$(tgt_query "SELECT name FROM pg_available_extensions ORDER BY name;")
     MISSING_EXTS=""
     CHECKED_COUNT=0
     while IFS= read -r ext; do
@@ -264,14 +264,14 @@ if [ -n "$TGT_VER" ]; then
             continue
         fi
         CHECKED_COUNT=$((CHECKED_COUNT + 1))
-        if ! printf '%s\n' "$TGT_EXTS" | grep -qx "$ext"; then
+        if ! printf '%s\n' "$TGT_AVAIL_EXTS" | grep -qx "$ext"; then
             MISSING_EXTS="${MISSING_EXTS:+$MISSING_EXTS, }$ext"
         fi
     done <<< "$SRC_EXTS"
     if [ -n "$MISSING_EXTS" ]; then
-        fail "Extensions" "missing on target: $MISSING_EXTS"
+        fail "Extensions" "not available on target: $MISSING_EXTS"
     elif [ "$CHECKED_COUNT" -gt 0 ]; then
-        pass "Extensions" "all $CHECKED_COUNT extension(s) present on target"
+        pass "Extensions" "all $CHECKED_COUNT source extension(s) available on target"
     else
         pass "Extensions" "no extensions to check"
     fi
