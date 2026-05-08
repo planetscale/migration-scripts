@@ -226,7 +226,7 @@ if [ "$INITIAL_COPY_DONE" = true ] && [ "$LAST_INITIAL_COPY_NOTIFIED" = "false" 
     DIR_EPOCH=$(stat -c %Y "$MIGRATION_DIR" 2>/dev/null || date +%s)
     SECS=$(( $(date +%s) - DIR_EPOCH ))
     RUNTIME=$(printf "%dh %02dm" $(( SECS/3600 )) $(( (SECS%3600)/60 )))
-    msg=":large_blue_circle: *Initial copy completed — CDC phase starting*"
+    msg=":large_green_circle: *Initial copy completed — CDC phase starting*"
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
     msg+=$'\n'"Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Indexes: ${INDEXES_DONE}/${INDEXES_TOTAL} | Constraints: ${CONSTRAINTS_DONE}/${CONSTRAINTS_TOTAL}"
     if slack_send "$msg"; then
@@ -254,14 +254,19 @@ elif [ "$CURRENT_STATUS" = "failed" ] && [ "$LAST_COMPLETION_NOTIFIED" = "false"
     fi
 
 elif [ "$CURRENT_STATUS" = "stopped" ] && [ "$LAST_STATUS" = "running" ]; then
-    msg=":warning: *Migration process stopped unexpectedly*"
+    msg=":red_circle: *Migration process stopped unexpectedly*"
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Data: ${GB} GB"
     msg+=$'\n'"Run: tail -50 ${LOG}"
     slack_send "$msg" || true
+fi
 
-elif [ "$CURRENT_ERROR_COUNT" -gt "$LAST_ERROR_COUNT" ]; then
+if [ "$CURRENT_ERROR_COUNT" -gt "$LAST_ERROR_COUNT" ]; then
     NEW_COUNT=$(( CURRENT_ERROR_COUNT - LAST_ERROR_COUNT ))
-    msg=":warning: *${NEW_COUNT} new error(s) in migration log*"
+    if [ "$CURRENT_STATUS" = "stopped" ]; then
+        msg=":red_circle: *${NEW_COUNT} new error(s) in migration log — process is not running*"
+    else
+        msg=":warning: *${NEW_COUNT} new error(s) in migration log*"
+    fi
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Total errors: ${CURRENT_ERROR_COUNT} | Tables: ${TABLES_DONE}/${TABLES_TOTAL}"
     slack_send "$msg" || true
 fi
