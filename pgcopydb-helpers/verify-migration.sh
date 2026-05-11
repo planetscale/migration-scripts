@@ -145,7 +145,7 @@ log_section "1/11  CONNECTION TEST"
 echo -n "  Testing source connection... "
 if SRC_PING=$(psql "$SOURCE_CONN" -t -A -c "SELECT version()" 2>&1); then
     log_pass "Source DB connected"
-    SRC_VER=$(echo "$SRC_PING" | head -1)
+    SRC_VER=$(echo "$SRC_PING" | grep -Ev '^(WARNING|DETAIL|HINT|NOTICE):' | head -1)
 else
     echo ""
     log_fail "Cannot connect to source DB — psql error:"
@@ -156,7 +156,7 @@ fi
 echo -n "  Testing target connection... "
 if TGT_PING=$(psql "$TARGET_CONN" -t -A -c "SELECT version()" 2>&1); then
     log_pass "Target DB connected"
-    TGT_VER=$(echo "$TGT_PING" | head -1)
+    TGT_VER=$(echo "$TGT_PING" | grep -Ev '^(WARNING|DETAIL|HINT|NOTICE):' | head -1)
 else
     echo ""
     log_fail "Cannot connect to target DB — psql error:"
@@ -172,10 +172,11 @@ TGT_DB=$(q "$TARGET_CONN" "SELECT current_database()")
 log_info "Source DB name: $SRC_DB  |  Target DB name: $TGT_DB"
 
 # Sanity-check that catalog queries actually work on the source
-SRC_SANITY=$(psql "$SOURCE_CONN" -t -A -c "SELECT count(*) FROM pg_class" 2>&1)
+SRC_SANITY_RAW=$(psql "$SOURCE_CONN" -t -A -c "SELECT count(*) FROM pg_class" 2>&1)
+SRC_SANITY=$(echo "$SRC_SANITY_RAW" | grep -E '^[0-9]+$' | tail -1)
 if ! [[ "$SRC_SANITY" =~ ^[0-9]+$ ]]; then
     log_fail "Source DB catalog query failed — all results below will be empty/wrong"
-    echo "       psql output: $SRC_SANITY" | head -5
+    echo "       psql output: $SRC_SANITY_RAW" | head -5
     log_warn "Check: SSL mode, IAM auth, search_path, or pg_hba.conf on the source"
     exit 1
 fi
