@@ -125,7 +125,7 @@ Before starting the migration, compare PostgreSQL parameters between source and 
 ~/compare-pg-params.sh
 ```
 
-Run the preflight check to validate that both databases and the migration instance are ready. This checks connectivity, WAL level, replication permissions, available slots/senders, conflicting publications, and local prerequisites:
+Run the preflight check to validate that both databases and the migration instance are ready. This checks connectivity, WAL level, replication permissions, available slots/senders, conflicting publications, extension compatibility (source extensions present on target), and local prerequisites:
 
 ```bash
 ~/preflight-check.sh
@@ -391,7 +391,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | Script | Phase | Description |
 |--------|-------|-------------|
 | `compare-pg-params.sh` | Prepare | Compare PostgreSQL parameters between source and target |
-| `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots) |
+| `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots, extension compatibility) |
 | `fix-replica-identity.sh` | Prepare | Set REPLICA IDENTITY FULL on tables without primary keys |
 | `filters.ini` | Prepare | pgcopydb filter configuration |
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
