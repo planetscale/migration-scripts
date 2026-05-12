@@ -29,6 +29,8 @@ ALTER ROLE migration_user SET wal_sender_timeout = 0;
 
 Repeat the `GRANT USAGE`, `GRANT SELECT`, and `ALTER DEFAULT PRIVILEGES` statements for each schema being migrated.
 
+**`wal_sender_timeout`:** Setting this to `0` on the source prevents the replication slot from being dropped during long COPY phases. The initial data copy can take hours on large databases, and the default timeout (60s) may cause PostgreSQL to drop the idle replication connection before CDC streaming begins.
+
 **`fix-replica-identity.sh` permissions:** The script runs `ALTER TABLE ... REPLICA IDENTITY FULL` on the source, which requires table ownership — `SELECT` alone is not sufficient. Grant `migration_user` membership in the role(s) that own the tables so it inherits ownership privileges. First, find which owner roles are involved:
 
 ```sql
