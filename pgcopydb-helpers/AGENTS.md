@@ -318,7 +318,7 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
 **Cutover procedure:**
 1. Stop writes to the source database (maintenance mode, read-only, etc.)
 2. Run `stop-cdc.sh` — it fetches the current WAL LSN, shows it, and asks you to confirm
-3. Wait for `check-cdc-status.sh` to show the apply LSN has reached the endpoint
+3. Wait for `check-cdc-status.sh` to show `Apply LSN` has reached the `endpos` LSN confirmed in step 2; once pgcopydb exits, the script prints `*** MIGRATION IS NOT RUNNING ***`
 4. pgcopydb exits cleanly
 5. Verify data on the target
 6. Switch application to the target
@@ -425,7 +425,7 @@ sqlite3 ~/migration_*/schema/filter.db \
 
 3. CUTOVER (when CDC is caught up)
    - Stop writes to source
-   - Run ~/stop-cdc.sh — to set the endpoint
+   - Run ~/stop-cdc.sh to set the endpoint
    - Wait for pgcopydb to finish applying and exit
    - Verify data on target
    - Switch application to target

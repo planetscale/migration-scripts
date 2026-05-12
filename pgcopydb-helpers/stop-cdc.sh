@@ -24,10 +24,10 @@ fi
 # --- loaded ---
 
 echo "Fetching current WAL LSN from source..."
-ENDPOS_LSN=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();" 2>&1)
-if [ $? -ne 0 ] || [ -z "$ENDPOS_LSN" ]; then
-    echo "ERROR: Failed to fetch LSN from source database:"
-    echo "  $ENDPOS_LSN"
+ENDPOS_LSN=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();")
+PSQL_RC=$?
+if [ "$PSQL_RC" -ne 0 ] || [ -z "$ENDPOS_LSN" ]; then
+    echo "ERROR: Failed to fetch LSN from source database"
     exit 1
 fi
 
