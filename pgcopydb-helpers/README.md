@@ -62,6 +62,21 @@ After running `fix-replica-identity.sh`, revoke the membership:
 REVOKE <owner_role> FROM migration_user;
 ```
 
+**Row-Level Security (RLS) — Supabase and other RLS-heavy sources:** If any source tables have RLS enabled, `migration_user` must bypass it — otherwise pgcopydb sees zero rows for those tables and the target ends up incomplete with no error. Check which tables use RLS (run per schema):
+
+```sql
+SELECT tablename, rowsecurity
+FROM pg_tables
+WHERE schemaname = '<schema_name>'
+  AND rowsecurity = true;
+```
+
+If any tables are returned, grant the bypass on the source (requires superuser):
+
+```sql
+ALTER ROLE migration_user BYPASSRLS;
+```
+
 **Logical replication (CDC only):** Logical replication must be enabled on the source before starting a `--follow` migration. How to enable it depends on your platform:
 
 - **Amazon RDS / Aurora:** Set `rds.logical_replication = 1` in the [parameter group](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.html) and reboot the instance. If you are using a custom parameter group, make sure it is associated with your instance. This change requires a reboot — it cannot be applied dynamically.

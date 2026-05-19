@@ -146,6 +146,24 @@ trigger_to_skip
 
 ---
 
+#### Source-Specific: Supabase RLS
+
+Supabase source databases typically have Row-Level Security on application tables. Without `BYPASSRLS`, the migration user reads zero rows from RLS-protected tables and the migration silently produces an incomplete target. Detect and fix on the source:
+
+```sql
+-- Find RLS-protected tables (run per schema)
+SELECT tablename, rowsecurity
+FROM pg_tables
+WHERE schemaname = '<schema_name>' AND rowsecurity = true;
+
+-- Fix (requires superuser on source)
+ALTER ROLE migration_user BYPASSRLS;
+```
+
+**When to flag:** Any migration from Supabase, or any source where `pg_tables.rowsecurity = true` exists in user schemas.
+
+---
+
 ### Running a Migration
 
 #### `run-migration.sh`
