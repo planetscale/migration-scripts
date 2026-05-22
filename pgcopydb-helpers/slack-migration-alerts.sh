@@ -184,13 +184,13 @@ if grep -q "All step are now done" "$LOG" 2>/dev/null; then
     INITIAL_COPY_DONE=true
 fi
 
-if grep -q "Migration SUCCEEDED" "$LOG" 2>/dev/null; then
-    MIGRATION_SUCCEEDED=true
-fi
-
 EXIT_LINE=$(grep "Exit code:" "$LOG" 2>/dev/null | tail -1 || true)
-if [ -n "$EXIT_LINE" ] && ! echo "$EXIT_LINE" | grep -q "Exit code: 0"; then
-    MIGRATION_FAILED=true
+if [ -n "$EXIT_LINE" ]; then
+    if echo "$EXIT_LINE" | grep -q "Exit code: 0"; then
+        MIGRATION_SUCCEEDED=true
+    else
+        MIGRATION_FAILED=true
+    fi
 fi
 
 if [ "$MIGRATION_SUCCEEDED" = true ]; then
@@ -223,9 +223,12 @@ NOTIFIED_INITIAL_COPY="$LAST_INITIAL_COPY_NOTIFIED"
 NOTIFIED_COMPLETION="$LAST_COMPLETION_NOTIFIED"
 
 if [ "$INITIAL_COPY_DONE" = true ] && [ "$LAST_INITIAL_COPY_NOTIFIED" = "false" ]; then
-    DIR_EPOCH=$(stat -c %Y "$MIGRATION_DIR" 2>/dev/null || date +%s)
-    SECS=$(( $(date +%s) - DIR_EPOCH ))
-    RUNTIME=$(printf "%dh %02dm" $(( SECS/3600 )) $(( (SECS%3600)/60 )))
+    RUNTIME=$(grep "Total Wall Clock Duration" "$LOG" 2>/dev/null | tail -1 | awk '{print $6}')
+    if [ -z "$RUNTIME" ]; then
+        DIR_EPOCH=$(stat -c %Y "$MIGRATION_DIR" 2>/dev/null || date +%s)
+        SECS=$(( $(date +%s) - DIR_EPOCH ))
+        RUNTIME=$(printf "%dh %02dm" $(( SECS/3600 )) $(( (SECS%3600)/60 )))
+    fi
     msg=":large_green_circle: *Initial copy completed — CDC phase starting*"
     msg+=$'\n'"Branch: *${PS_BRANCH_ID}* | Runtime: ${RUNTIME} | Data: ${GB} GB"
     msg+=$'\n'"Tables: ${TABLES_DONE}/${TABLES_TOTAL} | Indexes: ${INDEXES_DONE}/${INDEXES_TOTAL} | Constraints: ${CONSTRAINTS_DONE}/${CONSTRAINTS_TOTAL}"
