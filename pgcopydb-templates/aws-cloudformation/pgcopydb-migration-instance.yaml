@@ -268,8 +268,8 @@ Resources:
             04_install_postgresql:
               command: |
                 export DEBIAN_FRONTEND=noninteractive
-                # Install PostgreSQL 17 client and build dependencies
-                apt-get install -y postgresql-client-17 postgresql-17 postgresql-server-dev-17
+                # Install PostgreSQL 18 client and build dependencies
+                apt-get install -y postgresql-client-18 postgresql-18 postgresql-server-dev-18
             05_install_build_tools:
               command: |
                 export DEBIAN_FRONTEND=noninteractive
@@ -295,7 +295,7 @@ Resources:
                 cd /tmp
                 git clone --branch v0.18.0 https://github.com/planetscale/pgcopydb.git
                 cd pgcopydb
-                export PATH=/usr/lib/postgresql/17/bin:$PATH
+                export PATH=/usr/lib/postgresql/18/bin:$PATH
                 make clean || true
                 make
                 make install
@@ -338,7 +338,7 @@ Resources:
               group: root
             /etc/profile.d/pgcopydb.sh:
               content: |
-                export PATH=/usr/lib/postgresql/17/bin:$PATH
+                export PATH=/usr/lib/postgresql/18/bin:$PATH
                 alias pgcopydb-version='pgcopydb --version'
                 alias psql-version='psql --version'
                 alias check-planetscale='nc -zv app.connect.psdb.cloud 443 2>&1 | grep succeeded'
@@ -373,7 +373,7 @@ Resources:
             01_log_versions:
               command: |
                 echo "=== Installation verification ===" >> /var/log/cfn-init-verification.log
-                export PATH=/usr/lib/postgresql/17/bin:$PATH
+                export PATH=/usr/lib/postgresql/18/bin:$PATH
                 pgcopydb --version >> /var/log/cfn-init-verification.log 2>&1 || echo "pgcopydb installation failed" >> /var/log/cfn-init-verification.log
                 psql --version >> /var/log/cfn-init-verification.log 2>&1 || echo "PostgreSQL client installation failed" >> /var/log/cfn-init-verification.log
                 aws --version >> /var/log/cfn-init-verification.log 2>&1 || echo "AWS CLI installation failed" >> /var/log/cfn-init-verification.log

@@ -20,13 +20,13 @@ apt-get update -y
 apt-get install -y wget gnupg2 lsb-release curl unzip ca-certificates netcat-openbsd sqlite3
 
 # =============================================================================
-# Install PostgreSQL 17
+# Install PostgreSQL 18
 # =============================================================================
-echo "Installing PostgreSQL 17..."
+echo "Installing PostgreSQL 18..."
 wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
 apt-get update
-apt-get install -y postgresql-client-17 postgresql-17 postgresql-server-dev-17
+apt-get install -y postgresql-client-18 postgresql-18 postgresql-server-dev-18
 
 # =============================================================================
 # Install Build Tools
@@ -56,7 +56,7 @@ echo "Building pgcopydb from source..."
 cd /tmp
 git clone --branch v0.18.0 https://github.com/planetscale/pgcopydb.git
 cd pgcopydb
-export PATH=/usr/lib/postgresql/17/bin:$PATH
+export PATH=/usr/lib/postgresql/18/bin:$PATH
 make clean || true
 make
 make install
@@ -105,7 +105,7 @@ sysctl -p /etc/sysctl.d/99-pgcopydb.conf
 
 # PATH configuration
 cat > /etc/profile.d/pgcopydb.sh << 'PROFILE_EOF'
-export PATH=/usr/lib/postgresql/17/bin:$PATH
+export PATH=/usr/lib/postgresql/18/bin:$PATH
 alias pgcopydb-version='pgcopydb --version'
 alias psql-version='psql --version'
 alias check-planetscale='nc -zv app.connect.psdb.cloud 443 2>&1 | grep succeeded'
@@ -139,7 +139,7 @@ chmod +x /home/ubuntu/*.sh
 # Verify Installation
 # =============================================================================
 echo "=== Installation verification ===" >> /var/log/user-data-verification.log
-export PATH=/usr/lib/postgresql/17/bin:$PATH
+export PATH=/usr/lib/postgresql/18/bin:$PATH
 pgcopydb --version >> /var/log/user-data-verification.log 2>&1 || echo "pgcopydb installation failed" >> /var/log/user-data-verification.log
 psql --version >> /var/log/user-data-verification.log 2>&1 || echo "PostgreSQL client installation failed" >> /var/log/user-data-verification.log
 aws --version >> /var/log/user-data-verification.log 2>&1 || echo "AWS CLI installation failed" >> /var/log/user-data-verification.log

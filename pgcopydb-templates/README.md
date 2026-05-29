@@ -14,7 +14,7 @@ All three templates produce an equivalent migration instance — choose based on
 
 ## What Gets Provisioned
 
-- A compute instance with pgcopydb and PostgreSQL 17 client tools
+- A compute instance with pgcopydb and PostgreSQL 18 client tools
 - An attached data volume for migration working data
 - Network and access configuration (security group/firewall rule, IAM/SSH via SSM or IAP)
 - Migration helper scripts from this repo deployed to `/home/ubuntu/`
