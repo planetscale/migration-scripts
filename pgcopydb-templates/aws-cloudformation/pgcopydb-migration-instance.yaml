@@ -40,7 +40,7 @@ Metadata:
         default: "Your Public IP Address (Optional)"
   Generated:
     Tool: 'PlanetScale Liftoff Migration Reviewer'
-    Date: '2026-04-23T21:19:16.256Z'
+    Date: '2026-05-29T15:49:05.200Z'
     Purpose: 'pgcopydb EC2 instance for PostgreSQL to PlanetScale migrations'
 
 Parameters:
@@ -91,7 +91,7 @@ Parameters:
     Type: String
     Default: ''
     Description: Your public IP address to restrict SSH access (recommended). Leave empty to allow SSH from anywhere. Get your IP from icanhazip.com.
-    AllowedPattern: '^$|^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
+    AllowedPattern: '^$|^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
     ConstraintDescription: Must be empty or a valid IPv4 address (e.g., 203.0.113.123)
 
 Mappings:
@@ -289,7 +289,8 @@ Resources:
                   libncurses5-dev \
                   libkrb5-dev \
                   libselinux1-dev \
-                  libzstd-dev
+                  libzstd-dev \
+                  libnuma-dev
             06_build_pgcopydb:
               command: |
                 cd /tmp
@@ -364,7 +365,7 @@ Resources:
                 git clone --depth 1 https://github.com/planetscale/migration-scripts.git /tmp/migration-scripts
                 cp -r /tmp/migration-scripts/pgcopydb-helpers/* /home/ubuntu/
                 rm -rf /tmp/migration-scripts
-                chown ubuntu:ubuntu /home/ubuntu/*.sh /home/ubuntu/*.md
+                chown -R ubuntu:ubuntu /home/ubuntu/
                 chmod +x /home/ubuntu/*.sh
             01_apply_sysctl:
               command: sysctl -p /etc/sysctl.d/99-pgcopydb.conf

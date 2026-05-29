@@ -50,7 +50,8 @@ apt-get install -y \
     libncurses5-dev \
     libkrb5-dev \
     libselinux1-dev \
-    libzstd-dev
+    libzstd-dev \
+    libnuma-dev
 
 # =============================================================================
 # Build pgcopydb from Source
@@ -114,7 +115,7 @@ echo "Cloning PlanetScale migration helper scripts..."
 git clone --depth 1 https://github.com/planetscale/migration-scripts.git /tmp/migration-scripts
 cp -r /tmp/migration-scripts/pgcopydb-helpers/* /home/ubuntu/
 rm -rf /tmp/migration-scripts
-chown ubuntu:ubuntu /home/ubuntu/*.sh /home/ubuntu/*.md
+chown -R ubuntu:ubuntu /home/ubuntu/
 chmod +x /home/ubuntu/*.sh
 
 echo ""
