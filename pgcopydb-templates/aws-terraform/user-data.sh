@@ -47,7 +47,8 @@ apt-get install -y \
   libncurses5-dev \
   libkrb5-dev \
   libselinux1-dev \
-  libzstd-dev
+  libzstd-dev \
+  libnuma-dev
 
 # =============================================================================
 # Build pgcopydb from Source

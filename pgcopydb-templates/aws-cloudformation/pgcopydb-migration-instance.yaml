@@ -289,7 +289,8 @@ Resources:
                   libncurses5-dev \
                   libkrb5-dev \
                   libselinux1-dev \
-                  libzstd-dev
+                  libzstd-dev \
+                  libnuma-dev
             06_build_pgcopydb:
               command: |
                 cd /tmp
