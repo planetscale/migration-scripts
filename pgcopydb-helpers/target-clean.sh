@@ -87,6 +87,10 @@ WHERE n.nspname NOT IN ('pg_catalog','information_schema','pscale_extensions')
   AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e');"
 
 psql "$PGCOPYDB_TARGET_PGURI" --no-align -t -c "
+SELECT 'Publications:       ' || count(*)
+FROM pg_publication;"
+
+psql "$PGCOPYDB_TARGET_PGURI" --no-align -t -c "
 SELECT 'Extensions:         ' || count(*)
 FROM pg_extension WHERE extname != 'plpgsql';"
 
@@ -121,12 +125,12 @@ echo "Cleaning..."
 
 echo "  Dropping materialized views..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP MATERIALIZED VIEW IF EXISTS ' || schemaname || '.' || matviewname || ' CASCADE;'
+SELECT 'DROP MATERIALIZED VIEW IF EXISTS ' || quote_ident(schemaname) || '.' || quote_ident(matviewname) || ' CASCADE;'
 FROM pg_matviews;" | psql "$PGCOPYDB_TARGET_PGURI" 2>/dev/null || true
 
 echo "  Dropping views (non-extension-owned)..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP VIEW IF EXISTS ' || schemaname || '.\"' || viewname || '\" CASCADE;'
+SELECT 'DROP VIEW IF EXISTS ' || quote_ident(schemaname) || '.' || quote_ident(viewname) || ' CASCADE;'
 FROM pg_views
 WHERE schemaname NOT IN ('pg_catalog','information_schema')
   AND NOT EXISTS (
@@ -138,18 +142,22 @@ WHERE schemaname NOT IN ('pg_catalog','information_schema')
     ) AND d.deptype = 'e'
   );" | psql "$PGCOPYDB_TARGET_PGURI" 2>/dev/null || true
 
-echo "  Dropping publications/subscriptions..."
-psql "$PGCOPYDB_TARGET_PGURI" -c "DROP PUBLICATION IF EXISTS pgcopydb_pub CASCADE;" 2>/dev/null || true
-psql "$PGCOPYDB_TARGET_PGURI" -c "DROP SUBSCRIPTION IF EXISTS pgcopydb_sub CASCADE;" 2>/dev/null || true
+echo "  Dropping all publications and subscriptions..."
+psql "$PGCOPYDB_TARGET_PGURI" -t -c "
+SELECT 'DROP PUBLICATION IF EXISTS ' || quote_ident(pubname) || ' CASCADE;'
+FROM pg_publication;" | psql "$PGCOPYDB_TARGET_PGURI" 2>/dev/null || true
+psql "$PGCOPYDB_TARGET_PGURI" -t -c "
+SELECT 'DROP SUBSCRIPTION IF EXISTS ' || quote_ident(subname) || ' CASCADE;'
+FROM pg_subscription;" | psql "$PGCOPYDB_TARGET_PGURI" 2>/dev/null || true
 
 echo "  Dropping event triggers..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP EVENT TRIGGER IF EXISTS ' || evtname || ' CASCADE;'
+SELECT 'DROP EVENT TRIGGER IF EXISTS ' || quote_ident(evtname) || ' CASCADE;'
 FROM pg_event_trigger;" | psql "$PGCOPYDB_TARGET_PGURI" 2>/dev/null || true
 
 echo "  Dropping non-extension-owned aggregates..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP AGGREGATE IF EXISTS ' || n.nspname || '.\"' || p.proname || '\"('
+SELECT 'DROP AGGREGATE IF EXISTS ' || quote_ident(n.nspname) || '.' || quote_ident(p.proname) || '('
        || pg_get_function_identity_arguments(p.oid) || ') CASCADE;'
 FROM pg_proc p
 JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -160,7 +168,7 @@ WHERE n.nspname NOT IN ('pg_catalog','information_schema','pscale_extensions')
 
 echo "  Dropping non-extension-owned functions..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP FUNCTION IF EXISTS ' || n.nspname || '.\"' || p.proname || '\"('
+SELECT 'DROP FUNCTION IF EXISTS ' || quote_ident(n.nspname) || '.' || quote_ident(p.proname) || '('
        || pg_get_function_identity_arguments(p.oid) || ') CASCADE;'
 FROM pg_proc p
 JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -171,7 +179,7 @@ WHERE n.nspname NOT IN ('pg_catalog','information_schema','pscale_extensions')
 
 echo "  Dropping non-extension-owned procedures..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP PROCEDURE IF EXISTS ' || n.nspname || '.\"' || p.proname || '\"('
+SELECT 'DROP PROCEDURE IF EXISTS ' || quote_ident(n.nspname) || '.' || quote_ident(p.proname) || '('
        || pg_get_function_identity_arguments(p.oid) || ') CASCADE;'
 FROM pg_proc p
 JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -182,7 +190,7 @@ WHERE n.nspname NOT IN ('pg_catalog','information_schema','pscale_extensions')
 
 echo "  Dropping standalone custom types (enums + composites)..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP TYPE IF EXISTS ' || n.nspname || '.\"' || t.typname || '\" CASCADE;'
+SELECT 'DROP TYPE IF EXISTS ' || quote_ident(n.nspname) || '.' || quote_ident(t.typname) || ' CASCADE;'
 FROM pg_type t
 JOIN pg_namespace n ON t.typnamespace = n.oid
 WHERE t.typtype IN ('c', 'e')
@@ -193,7 +201,7 @@ ORDER BY n.nspname, t.typname;" | psql "$PGCOPYDB_TARGET_PGURI" 2>/dev/null || t
 
 echo "  Dropping non-default schemas (excluding extension-owned)..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP SCHEMA IF EXISTS ' || n.nspname || ' CASCADE;'
+SELECT 'DROP SCHEMA IF EXISTS ' || quote_ident(n.nspname) || ' CASCADE;'
 FROM pg_namespace n
 WHERE n.nspname NOT IN ('pg_catalog','information_schema','pg_toast','public','pscale_extensions')
   AND n.nspname NOT LIKE 'pg_temp%' AND n.nspname NOT LIKE 'pg_toast_temp%'
@@ -202,7 +210,7 @@ WHERE n.nspname NOT IN ('pg_catalog','information_schema','pg_toast','public','p
 
 echo "  Dropping partitioned tables in public..."
 psql "$PGCOPYDB_TARGET_PGURI" -t -c "
-SELECT 'DROP TABLE IF EXISTS public.\"' || relname || '\" CASCADE;'
+SELECT 'DROP TABLE IF EXISTS public.' || quote_ident(relname) || ' CASCADE;'
 FROM pg_class
 WHERE relkind = 'p'
   AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')

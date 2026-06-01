@@ -11,6 +11,7 @@ All scripts read connection strings from `~/.env`:
 ```bash
 export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
 export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
+export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
 ```
 
 ## Script Reference
@@ -86,7 +87,7 @@ Validates all migration prerequisites before starting `pgcopydb clone --follow`.
 
 **Checks performed:**
 - **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, prepared transactions
-- **Target:** connectivity, replication permission, leftover pgcopydb schema
+- **Target:** connectivity, replication permission, leftover pgcopydb schema, extension compatibility (FAILs if any source extension is absent on target — add missing ones to `[exclude-extension]` in `filters.ini` if the exclusion is intentional)
 - **Instance:** `~/filters.ini` exists, pgcopydb binary on PATH
 
 **When to use:** Before every migration attempt. Run after setting up `~/.env` and `~/filters.ini` but before `~/start-migration-screen.sh`. Fix all FAILs before proceeding. Review WARNs — especially `wal_sender_timeout` (should be `0` for large migrations) and leftover state from previous attempts.
@@ -146,6 +147,24 @@ trigger_to_skip
 
 ---
 
+#### Source-Specific: Supabase RLS
+
+Supabase source databases typically have Row-Level Security on application tables. Without `BYPASSRLS`, the migration user reads zero rows from RLS-protected tables and the migration silently produces an incomplete target. Detect and fix on the source:
+
+```sql
+-- Find RLS-protected tables (run per schema)
+SELECT tablename, rowsecurity
+FROM pg_tables
+WHERE schemaname = '<schema_name>' AND rowsecurity = true;
+
+-- Fix (requires superuser on source)
+ALTER ROLE migration_user BYPASSRLS;
+```
+
+**When to flag:** Any migration from Supabase, or any source where `pg_tables.rowsecurity = true` exists in user schemas.
+
+---
+
 ### Running a Migration
 
 #### `run-migration.sh`
@@ -188,6 +207,32 @@ Wrapper that runs `run-migration.sh` inside a detached `screen` session named "m
 ---
 
 ### Monitoring
+
+#### `slack-migration-alerts.sh`
+
+Sends Slack alerts for migration events. Runs from cron (default every 2 min) and fires each alert exactly once. Requires `SLACK_WEBHOOK_URL` in `~/.env`.
+
+```bash
+~/slack-migration-alerts.sh --test         # send a test message to verify the webhook
+~/slack-migration-alerts.sh --setup        # install cron job (default every 2 min)
+~/slack-migration-alerts.sh --setup --interval N  # custom interval (1-59 min)
+~/slack-migration-alerts.sh --uninstall    # remove the cron job
+```
+
+**Alerts fired:**
+- Process stopped unexpectedly (fires once per running→stopped transition)
+- New ERROR lines in `migration.log` (fires once per new batch)
+- Initial copy completed — data, indexes, constraints, sequences, and post-data done; CDC phase is starting (fires once)
+- Migration completed successfully (fires once)
+- Migration failed with non-zero exit code (fires once)
+
+All alerts include the PlanetScale branch ID (parsed from `PGCOPYDB_TARGET_PGURI`) and migration progress context (tables, data GB, runtime). Alert messages do not include raw log content.
+
+**State file:** `$MIGRATION_DIR/.notify-state` — resets automatically when a new migration directory is created.
+
+**Webhook:** set `SLACK_WEBHOOK_URL` in `~/.env`
+
+---
 
 #### `check-migration-status.sh`
 
@@ -308,26 +353,21 @@ Cleans up pgcopydb replication artifacts on both source and target databases.
 
 #### `stop-cdc.sh`
 
-Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover.
+Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover. The script fetches the current WAL LSN from the source automatically, displays it, and prompts for confirmation before writing it to the sentinel.
 
 ```bash
-# Get the current source LSN
-psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
-
-# Set the endpoint
-~/stop-cdc.sh 41EBA/7C7A1AD8
-MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh 41EBA/7C7A1AD8  # explicit dir
+~/stop-cdc.sh
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
 ```
 
 **Cutover procedure:**
 1. Stop writes to the source database (maintenance mode, read-only, etc.)
-2. Get the current WAL LSN from the source
-3. Run `stop-cdc.sh` with that LSN
-4. Wait for `check-cdc-status.sh` to show the apply LSN has reached the endpoint
-5. pgcopydb exits cleanly
-6. Verify data on the target
-7. Switch application to the target
-8. Run `drop-replication-slots.sh` to clean up
+2. Run `stop-cdc.sh` — it fetches the current WAL LSN, shows it, and asks you to confirm
+3. Wait for `check-cdc-status.sh` to show `Apply LSN` has reached the `endpos` LSN confirmed in step 2; once pgcopydb exits, the script prints `*** MIGRATION IS NOT RUNNING ***`
+4. pgcopydb exits cleanly
+5. Verify data on the target
+6. Switch application to the target
+7. Run `drop-replication-slots.sh` to clean up
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
@@ -427,10 +467,11 @@ sqlite3 ~/migration_*/schema/filter.db \
    - Run ~/start-migration-screen.sh to begin
    - Monitor with ~/check-migration-status.sh (initial copy phase)
    - Monitor with ~/check-cdc-status.sh (CDC catch-up phase)
+   - Run ~/slack-migration-alerts.sh --setup to enable Slack alerts (optional)
 
 3. CUTOVER (when CDC is caught up)
    - Stop writes to source
-   - Run ~/stop-cdc.sh <LSN> to set the endpoint
+   - Run ~/stop-cdc.sh to set the endpoint
    - Wait for pgcopydb to finish applying and exit
    - Verify data on target
    - Switch application to target
