@@ -139,7 +139,7 @@ Before starting the migration, compare PostgreSQL parameters between source and 
 ~/compare-pg-params.sh
 ```
 
-Run the preflight check to validate that both databases and the migration instance are ready. This checks connectivity, WAL level, replication permissions, available slots/senders, conflicting publications, extension compatibility (source extensions present on target), and local prerequisites:
+Run the preflight check to validate that both databases and the migration instance are ready. This checks connectivity, WAL level, replication permissions, available slots/senders, conflicting publications, per-schema read permissions on objects that `~/filters.ini` will actually migrate (schemas and tables outside that scope are skipped), extension compatibility (source extensions present on target), and local prerequisites:
 
 ```bash
 ~/preflight-check.sh
@@ -271,7 +271,7 @@ extension_to_skip
 trigger_to_skip
 ```
 
-**Available sections:** `[exclude-schema]`, `[exclude-table]`, `[exclude-extension]`, `[exclude-event-trigger]`, `[include-only-schema]`, `[include-only-table]`. The `include-only` sections are mutually exclusive with the `exclude` sections.
+**Available sections:** `[exclude-schema]`, `[exclude-table]`, `[exclude-extension]`, `[exclude-event-trigger]`, `[include-only-schema]`, `[include-only-table]`. The `include-only` sections are mutually exclusive with the `exclude` sections — pgcopydb rejects `include-only-table` combined with `exclude-schema`/`exclude-table`, and `include-only-schema` combined with `exclude-schema`. `preflight-check.sh` emits a `[WARN]` if it detects one of these combinations.
 
 **Important:** No comments are allowed inside sections — pgcopydb parses `#` lines as object names. Place all comments before the first section.
 

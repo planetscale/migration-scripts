@@ -86,9 +86,9 @@ Validates all migration prerequisites before starting `pgcopydb clone --follow`.
 ```
 
 **Checks performed:**
-- **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, prepared transactions
+- **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, prepared transactions, per-schema read permissions (USAGE plus SELECT on tables, materialized views, and sequences) scoped to what `~/filters.ini` will migrate — matviews are counted as tables (relkind `'m'`) and called out in the detail line; schemas/tables outside the filter scope are skipped
 - **Target:** connectivity, replication permission, leftover pgcopydb schema, extension compatibility (FAILs if any source extension is absent on target — add missing ones to `[exclude-extension]` in `filters.ini` if the exclusion is intentional)
-- **Instance:** `~/filters.ini` exists, pgcopydb binary on PATH
+- **Instance:** `~/filters.ini` exists (WARNs if it uses a pgcopydb-disallowed section combination — `include-only-table` with `exclude-schema`/`exclude-table`, or `include-only-schema` with `exclude-schema`), pgcopydb binary on PATH
 
 **When to use:** Before every migration attempt. Run after setting up `~/.env` and `~/filters.ini` but before `~/start-migration-screen.sh`. Fix all FAILs before proceeding. Review WARNs — especially `wal_sender_timeout` (should be `0` for large migrations) and leftover state from previous attempts.
 
@@ -137,6 +137,7 @@ trigger_to_skip
 **Important rules:**
 - No comments allowed inside sections (pgcopydb parses `#` lines as object names)
 - All comments must go before the first section
+- `include-only` and `exclude` sections are mutually exclusive: pgcopydb rejects `include-only-table` with `exclude-schema`/`exclude-table`, and `include-only-schema` with `exclude-schema`. `preflight-check.sh` WARNs on these combinations
 - `[exclude-extension]` uses `pg_depend` to find and exclude all objects owned by the listed extensions, including views and functions in `public`. See [supported extensions](https://planetscale.com/docs/postgres/extensions) for what PlanetScale supports
 - After pgcopydb completes STEP 1 (catalog), verify extension filtering worked: `sqlite3 $DIR/schema/filter.db "SELECT COUNT(*) FROM s_depend;"` must be > 0
 
