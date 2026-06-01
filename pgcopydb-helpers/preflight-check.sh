@@ -144,6 +144,15 @@ build_table_filter() {
     fi
 }
 
+# Lists disallowed section combinations present in filters.ini (pgcopydb rejects these), or ""
+filter_conflicts() {
+    local c=()
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-table + exclude-schema")
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ]  && c+=("include-only-table + exclude-table")
+    [ ${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-schema + exclude-schema")
+    local IFS="; "; echo "${c[*]:-}"
+}
+
 # ── Pre-parse filters.ini (scope needed for source permission checks) ─
 FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
 FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
@@ -273,7 +282,7 @@ else
     fail "DB connect privilege" "$SRC_USER lacks CONNECT — run: GRANT CONNECT ON DATABASE <db> TO $SRC_USER"
 fi
 
-# Per-schema: USAGE + SELECT on tables/sequences, scoped to what filters.ini will migrate
+# Per-schema: USAGE + SELECT on tables/mat views/sequences, scoped to what filters.ini will migrate
 _schema_where=$(build_schema_where)
 _table_filter=$(build_table_filter)
 [ "$(filter_scope_mode)" = "include-table" ] && _check_seqs=false || _check_seqs=true
@@ -285,20 +294,24 @@ else
     _seq_total="0"; _seq_missing="0"
 fi
 
-SCHEMA_PERMS=$(src_query "SELECT n.nspname, has_schema_privilege(current_user, n.nspname, 'USAGE'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'r'${_table_filter}), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'r'${_table_filter} AND NOT has_table_privilege(current_user, c.oid, 'SELECT')), ${_seq_total}, ${_seq_missing} FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' ${_schema_where} ORDER BY n.nspname;")
+# How many of the missing-SELECT relations are matviews (relkind 'm'), reported separately.
+_mv_missing="(SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'm'${_table_filter} AND NOT has_table_privilege(current_user, c.oid, 'SELECT'))"
+
+SCHEMA_PERMS=$(src_query "SELECT n.nspname, has_schema_privilege(current_user, n.nspname, 'USAGE'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind IN ('r', 'm')${_table_filter}), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind IN ('r', 'm')${_table_filter} AND NOT has_table_privilege(current_user, c.oid, 'SELECT')), ${_seq_total}, ${_seq_missing}, ${_mv_missing} FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' ${_schema_where} ORDER BY n.nspname;")
 
 if [ -z "$SCHEMA_PERMS" ]; then
     warn "Schema read permissions" "no non-system schemas found or query failed"
 else
-    while IFS='|' read -r schema usage_ok total_tables tables_missing total_seqs seqs_missing; do
+    while IFS='|' read -r schema usage_ok total_tables tables_missing total_seqs seqs_missing mvs_missing; do
         [ -z "$schema" ] && continue
         label="Read perms: $schema"
+        mv_note=""; [ "${mvs_missing:-0}" -gt 0 ] && mv_note=" (incl. ${mvs_missing} materialized view(s))"
         if [ "$usage_ok" = "f" ]; then
             fail "$label" "no USAGE on schema — run: GRANT USAGE ON SCHEMA $schema TO $SRC_USER"
         elif [ "${tables_missing:-0}" -gt 0 ] && [ "${seqs_missing:-0}" -gt 0 ]; then
-            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables, ${seqs_missing}/${total_seqs} sequences"
+            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables${mv_note}, ${seqs_missing}/${total_seqs} sequences"
         elif [ "${tables_missing:-0}" -gt 0 ]; then
-            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables — run: GRANT SELECT ON ALL TABLES IN SCHEMA $schema TO $SRC_USER"
+            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables${mv_note} — run: GRANT SELECT ON ALL TABLES IN SCHEMA $schema TO $SRC_USER;"
         elif [ "${seqs_missing:-0}" -gt 0 ]; then
             fail "$label" "missing SELECT on ${seqs_missing}/${total_seqs} sequences — run: GRANT SELECT ON ALL SEQUENCES IN SCHEMA $schema TO $SRC_USER"
         else
@@ -383,6 +396,8 @@ echo "  ────────────────────────
 # 14. filters.ini
 if [ -f ~/filters.ini ]; then
     pass "filters.ini" "~/filters.ini found"
+    _conflicts=$(filter_conflicts)
+    [ -n "$_conflicts" ] && warn "filters.ini combination" "$_conflicts — pgcopydb disallows these together"
 else
     fail "filters.ini" "~/filters.ini not found"
 fi
