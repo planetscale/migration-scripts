@@ -58,7 +58,7 @@ apt-get install -y \
 # =============================================================================
 echo "Building pgcopydb from source..."
 cd /tmp
-git clone --branch v0.18.0 https://github.com/planetscale/pgcopydb.git
+git clone --branch v0.19.0 https://github.com/planetscale/pgcopydb.git
 cd pgcopydb
 export PATH=/usr/lib/postgresql/18/bin:$PATH
 make clean || true
