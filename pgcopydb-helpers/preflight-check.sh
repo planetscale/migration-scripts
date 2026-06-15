@@ -404,13 +404,13 @@ fi
 
 # 15. pgcopydb binary
 PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || echo "")
-if [ -z "$PGCOPYDB_BIN" ] && [ -x /usr/lib/postgresql/17/bin/pgcopydb ]; then
-    PGCOPYDB_BIN="/usr/lib/postgresql/17/bin/pgcopydb"
+if [ -z "$PGCOPYDB_BIN" ]; then
+    PGCOPYDB_BIN=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1)
 fi
-if [ -n "$PGCOPYDB_BIN" ]; then
+if [ -n "$PGCOPYDB_BIN" ] && [ -x "$PGCOPYDB_BIN" ]; then
     pass "pgcopydb binary" "$PGCOPYDB_BIN"
 else
-    fail "pgcopydb binary" "not found on PATH or /usr/lib/postgresql/17/bin/"
+    fail "pgcopydb binary" "not found on PATH or under /usr/lib/postgresql/*/bin/"
 fi
 
 # ── Summary ────────────────────────────────────────────────────────

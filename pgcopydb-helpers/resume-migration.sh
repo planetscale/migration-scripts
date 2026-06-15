@@ -26,6 +26,21 @@ if [ -z "${PGCOPYDB_SOURCE_PGURI:-}" ] || [ -z "${PGCOPYDB_TARGET_PGURI:-}" ]; t
 fi
 # --- loaded ---
 
+# --- Locate pgcopydb: prefer PATH, else highest-versioned PG install ---
+find_pgcopydb() {
+    local bin
+    if bin=$(command -v pgcopydb 2>/dev/null); then
+        echo "$bin"; return 0
+    fi
+    bin=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1)
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+        echo "$bin"; return 0
+    fi
+    return 1
+}
+PGCOPYDB_BIN=$(find_pgcopydb) || { echo "ERROR: pgcopydb not found on PATH or under /usr/lib/postgresql/*/bin" >&2; exit 1; }
+# --- located ---
+
 # Find the most recent migration directory, or set explicitly
 MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 
@@ -56,7 +71,7 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
     echo "Migration dir: $MIGRATION_DIR"
     echo "=========================================="
 
-    /usr/lib/postgresql/17/bin/pgcopydb clone \
+    "$PGCOPYDB_BIN" clone \
         --follow \
         --plugin wal2json \
         --resume \

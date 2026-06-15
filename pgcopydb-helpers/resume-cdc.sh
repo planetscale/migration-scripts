@@ -46,11 +46,19 @@ cd "$MIGRATION_DIR"
 ulimit -c unlimited
 echo "$MIGRATION_DIR/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
 
-PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || true)
-if [ -z "$PGCOPYDB_BIN" ]; then
-    echo "ERROR: pgcopydb not found on PATH"
-    exit 1
-fi
+# --- Locate pgcopydb: prefer PATH, else highest-versioned PG install ---
+find_pgcopydb() {
+    local bin
+    if bin=$(command -v pgcopydb 2>/dev/null); then
+        echo "$bin"; return 0
+    fi
+    bin=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1)
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+        echo "$bin"; return 0
+    fi
+    return 1
+}
+PGCOPYDB_BIN=$(find_pgcopydb) || { echo "ERROR: pgcopydb not found on PATH or under /usr/lib/postgresql/*/bin" >&2; exit 1; }
 
 # Back up SQLite catalog before resume
 cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date +%Y%m%d-%H%M%S)"
