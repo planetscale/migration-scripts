@@ -17,12 +17,11 @@
 #   --row-count-tolerance <pct>   Allowed % difference for row estimates (default: 5)
 #   --spot-check-tables <n>       Number of largest tables to spot-check (default: 20)
 #   --no-spot-check               Skip min/max spot-check (fastest mode)
-#   --schemas <s1,s2,...>         Only check these schemas (default: all non-system)
 #   --exact-count-tables <n>      Random tables to exact-count (default: 10, 0=skip)
 #   --exact-count-max-gb <n>      Max table size in GB for exact count (default: 10)
 #   --exact-count-timeout <s>     Per-table COUNT(*) timeout in seconds (default: 120)
-#   --filters <path>              filters.ini to scope checks to migrated objects (default: ~/filters.ini)
-#                                 Point at a nonexistent path (e.g. /dev/null) to compare all objects.
+#   --filters <path>              Path to filters.ini (default: ~/filters.ini). Required —
+#                                 verify scopes to the same object set the migration used.
 # =============================================================================
 
 set -uo pipefail
@@ -53,7 +52,6 @@ PASS=0; FAIL=0; WARN=0
 ROW_TOLERANCE=5
 SPOT_CHECK_N=20
 NO_SPOT_CHECK=false
-SCHEMA_FILTER=""       # empty = all non-system schemas
 EXACT_COUNT_N=10       # number of random tables to exact-count
 EXACT_COUNT_MAX_GB=10  # tables larger than this are skipped
 EXACT_COUNT_TIMEOUT=120
@@ -208,7 +206,6 @@ while [[ $# -gt 0 ]]; do
         --row-count-tolerance)  ROW_TOLERANCE="$2"; shift 2 ;;
         --spot-check-tables)    SPOT_CHECK_N="$2"; shift 2 ;;
         --no-spot-check)        NO_SPOT_CHECK=true; shift ;;
-        --schemas)              SCHEMA_FILTER="$2"; shift 2 ;;
         --exact-count-tables)   EXACT_COUNT_N="$2"; shift 2 ;;
         --exact-count-max-gb)   EXACT_COUNT_MAX_GB="$2"; shift 2 ;;
         --exact-count-timeout)  EXACT_COUNT_TIMEOUT="$2"; shift 2 ;;
@@ -218,25 +215,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build schema exclusion / inclusion clause used in most queries
-if [[ -n "$SCHEMA_FILTER" ]]; then
-    # Convert comma list → SQL IN list
-    SCHEMA_SQL_FILTER="AND n.nspname IN ($(echo "$SCHEMA_FILTER" | sed "s/,/','/g; s/^/'/; s/$/'/" ))"
-    SCHEMA_SQL_FILTER_PLAIN="AND table_schema IN ($(echo "$SCHEMA_FILTER" | sed "s/,/','/g; s/^/'/; s/$/'/" ))"
-else
-    SCHEMA_SQL_FILTER="AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')"
-    SCHEMA_SQL_FILTER_PLAIN="AND table_schema NOT IN ('pg_catalog','information_schema','pg_toast')"
-fi
+# Always-required system-schema exclusion (independent of filters.ini)
+SCHEMA_SQL_FILTER="AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')"
+SCHEMA_SQL_FILTER_PLAIN="AND table_schema NOT IN ('pg_catalog','information_schema','pg_toast')"
 
-# Load filters.ini so checks are scoped to what the migration actually copies.
-# Arrays stay empty (→ all helpers return "") when the file is absent, preserving
-# the original compare-everything behaviour. Point --filters at a nonexistent
-# path (e.g. /dev/null) to deliberately compare all objects.
+# Load filters.ini so checks are scoped to the exact object set the migration copied.
+# filters.ini is required: verify must use the same scope the migration ran with, so the
+# same file governs both.
 if [[ -f "$FILTERS_FILE" ]]; then
     parse_filters_ini "$FILTERS_FILE"
     FILTER_DESC="$FILTERS_FILE — $(filter_scope_describe)"
 else
-    FILTER_DESC="$FILTERS_FILE not found — comparing all objects"
+    echo -e "${RED}Error:${NC} filters.ini not found at ${FILTERS_FILE}" >&2
+    echo "  verify-migration.sh scopes its checks to the same object set the migration" >&2
+    echo "  used, so a filters.ini is required. Create ~/filters.ini, or pass --filters <path>." >&2
+    exit 1
 fi
 
 # ── Prerequisite check ────────────────────────────────────────────────────────
@@ -394,7 +387,6 @@ IDX_QUERY="
     FROM pg_indexes
     WHERE true
     AND schemaname NOT IN ('pg_catalog','information_schema','pg_toast')
-    $( [[ -n "$SCHEMA_FILTER" ]] && echo "AND schemaname IN ($(echo "$SCHEMA_FILTER" | sed "s/,/','/g; s/^/'/; s/$/'/" ))" || true )
     $(schema_clause "schemaname") $(table_clause "schemaname" "tablename")
     ORDER BY 1"
 
@@ -448,7 +440,6 @@ VIEW_QUERY="
     SELECT schemaname || '.' || viewname
     FROM pg_views
     WHERE schemaname NOT IN ('pg_catalog','information_schema')
-    $( [[ -n "$SCHEMA_FILTER" ]] && echo "AND schemaname IN ($(echo "$SCHEMA_FILTER" | sed "s/,/','/g; s/^/'/; s/$/'/" ))" || true )
     $(schema_clause "schemaname")
     ORDER BY 1"
 
