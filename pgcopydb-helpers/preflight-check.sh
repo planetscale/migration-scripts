@@ -405,7 +405,7 @@ fi
 # 15. pgcopydb binary
 PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || echo "")
 if [ -z "$PGCOPYDB_BIN" ]; then
-    PGCOPYDB_BIN=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1)
+    PGCOPYDB_BIN=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1 || true)
 fi
 if [ -n "$PGCOPYDB_BIN" ] && [ -x "$PGCOPYDB_BIN" ]; then
     pass "pgcopydb binary" "$PGCOPYDB_BIN"

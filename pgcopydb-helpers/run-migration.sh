@@ -27,7 +27,7 @@ find_pgcopydb() {
     if bin=$(command -v pgcopydb 2>/dev/null); then
         echo "$bin"; return 0
     fi
-    bin=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1)
+    bin=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1 || true)
     if [ -n "$bin" ] && [ -x "$bin" ]; then
         echo "$bin"; return 0
     fi
