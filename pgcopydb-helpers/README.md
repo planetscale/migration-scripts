@@ -212,7 +212,7 @@ To receive Slack alerts for migration events (errors, initial copy completion, s
    ~/verify-migration.sh
    ```
 
-   The script reads `~/filters.ini` and scopes its checks to the objects the migration actually copied, so schemas, tables, and extensions you excluded (for example Supabase's `auth`, `storage`, and `realtime` schemas) are not reported as missing. Pass `--filters <path>` to use a different filter file, or point it at a nonexistent path to compare every object.
+   The script reads `~/filters.ini` and scopes its checks to the objects the migration actually copied, so schemas, tables, and extensions you excluded (for example Supabase's `auth`, `storage`, and `realtime` schemas) are not reported as missing. A `filters.ini` is required — verify must use the same scope the migration ran with — so the script errors out if one is not found; pass `--filters <path>` to use a file in a non-default location.
 
 6. **Switch** your application to the PlanetScale target.
 
