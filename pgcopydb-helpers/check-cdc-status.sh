@@ -23,7 +23,6 @@ if [ -z "$MIGRATION_DIR" ]; then
     exit 1
 fi
 
-# All phases (clone, resume, resume-cdc) append to migration.log
 LOG="$MIGRATION_DIR/migration.log"
 
 # --- 1. Process check ---
