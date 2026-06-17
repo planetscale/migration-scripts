@@ -60,10 +60,12 @@ Verifies that all data was copied correctly from source to target after a migrat
 | `--row-count-tolerance <pct>` | 5 | Allowed % difference for `pg_class` row estimates |
 | `--spot-check-tables <n>` | 20 | Number of tables for MIN/MAX spot-check |
 | `--no-spot-check` | — | Skip MIN/MAX spot-check entirely |
-| `--schemas <s1,s2,...>` | all | Restrict checks to specific schemas |
 | `--exact-count-tables <n>` | 10 | Tables to exact-count (0 = skip) |
 | `--exact-count-max-gb <n>` | 10 | Max table size in GB for exact count |
 | `--exact-count-timeout <s>` | 120 | Per-table `COUNT(*)` timeout in seconds |
+| `--filters <path>` | `~/filters.ini` | Path to the filters.ini used to scope checks to migrated objects (required; errors out if absent) |
+
+**filters.ini awareness:** The migration only copies the subset of objects allowed by `~/filters.ini`, so this script scopes every check to that same subset — otherwise intentionally-excluded objects (e.g. Supabase's `auth`, `storage`, `realtime` schemas) report as "missing in target" false positives, and the exact-count sampler can even flag an excluded table as confirmed data loss. It honors `[exclude-schema]`/`[include-only-schema]` (all checks), `[exclude-table]`/`[include-only-table]` (table, row-count, spot-check, and exact-count checks), and `[exclude-extension]` (the extensions check), using the same interpretation as `preflight-check.sh`. The active scope is printed in the header. filters.ini is **required** — verify uses the same scope the migration ran with, so it errors out if the file is absent; to compare everything, use a filters.ini with no scope sections. Note: in `include-only-table` mode, non-table objects (views, functions, sequences) are scoped only to the schemas of the included tables, so some may still report as missing.
 
 **When to use:** After `pgcopydb` finishes the initial COPY phase and before enabling CDC or cutting over. Run it multiple times — exact-count tables are chosen randomly, so repeated runs cover more tables.
 
