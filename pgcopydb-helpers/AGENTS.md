@@ -11,6 +11,7 @@ All scripts read connection strings from `~/.env`:
 ```bash
 export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
 export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
+export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
 ```
 
 ## Script Reference
@@ -59,10 +60,12 @@ Verifies that all data was copied correctly from source to target after a migrat
 | `--row-count-tolerance <pct>` | 5 | Allowed % difference for `pg_class` row estimates |
 | `--spot-check-tables <n>` | 20 | Number of tables for MIN/MAX spot-check |
 | `--no-spot-check` | — | Skip MIN/MAX spot-check entirely |
-| `--schemas <s1,s2,...>` | all | Restrict checks to specific schemas |
 | `--exact-count-tables <n>` | 10 | Tables to exact-count (0 = skip) |
 | `--exact-count-max-gb <n>` | 10 | Max table size in GB for exact count |
 | `--exact-count-timeout <s>` | 120 | Per-table `COUNT(*)` timeout in seconds |
+| `--filters <path>` | `~/filters.ini` | Path to the filters.ini used to scope checks to migrated objects (required; errors out if absent) |
+
+**filters.ini awareness:** The migration only copies the subset of objects allowed by `~/filters.ini`, so this script scopes every check to that same subset — otherwise intentionally-excluded objects (e.g. Supabase's `auth`, `storage`, `realtime` schemas) report as "missing in target" false positives, and the exact-count sampler can even flag an excluded table as confirmed data loss. It honors `[exclude-schema]`/`[include-only-schema]` (all checks), `[exclude-table]`/`[include-only-table]` (table, row-count, spot-check, and exact-count checks), and `[exclude-extension]` (the extensions check), using the same interpretation as `preflight-check.sh`. The active scope is printed in the header. filters.ini is **required** — verify uses the same scope the migration ran with, so it errors out if the file is absent; to compare everything, use a filters.ini with no scope sections. Note: in `include-only-table` mode, non-table objects (views, functions, sequences) are scoped only to the schemas of the included tables, so some may still report as missing.
 
 **When to use:** After `pgcopydb` finishes the initial COPY phase and before enabling CDC or cutting over. Run it multiple times — exact-count tables are chosen randomly, so repeated runs cover more tables.
 
@@ -85,9 +88,9 @@ Validates all migration prerequisites before starting `pgcopydb clone --follow`.
 ```
 
 **Checks performed:**
-- **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, prepared transactions
-- **Target:** connectivity, replication permission, leftover pgcopydb schema
-- **Instance:** `~/filters.ini` exists, pgcopydb binary on PATH
+- **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, prepared transactions, per-schema read permissions (USAGE plus SELECT on tables, materialized views, and sequences) scoped to what `~/filters.ini` will migrate — matviews are counted as tables (relkind `'m'`) and called out in the detail line; schemas/tables outside the filter scope are skipped
+- **Target:** connectivity, replication permission, leftover pgcopydb schema, extension compatibility (FAILs if any source extension is absent on target — add missing ones to `[exclude-extension]` in `filters.ini` if the exclusion is intentional)
+- **Instance:** `~/filters.ini` exists (WARNs if it uses a pgcopydb-disallowed section combination — `include-only-table` with `exclude-schema`/`exclude-table`, or `include-only-schema` with `exclude-schema`), pgcopydb binary on PATH
 
 **When to use:** Before every migration attempt. Run after setting up `~/.env` and `~/filters.ini` but before `~/start-migration-screen.sh`. Fix all FAILs before proceeding. Review WARNs — especially `wal_sender_timeout` (should be `0` for large migrations) and leftover state from previous attempts.
 
@@ -136,6 +139,7 @@ trigger_to_skip
 **Important rules:**
 - No comments allowed inside sections (pgcopydb parses `#` lines as object names)
 - All comments must go before the first section
+- `include-only` and `exclude` sections are mutually exclusive: pgcopydb rejects `include-only-table` with `exclude-schema`/`exclude-table`, and `include-only-schema` with `exclude-schema`. `preflight-check.sh` WARNs on these combinations
 - `[exclude-extension]` uses `pg_depend` to find and exclude all objects owned by the listed extensions, including views and functions in `public`. See [supported extensions](https://planetscale.com/docs/postgres/extensions) for what PlanetScale supports
 - After pgcopydb completes STEP 1 (catalog), verify extension filtering worked: `sqlite3 $DIR/schema/filter.db "SELECT COUNT(*) FROM s_depend;"` must be > 0
 
@@ -143,6 +147,24 @@ trigger_to_skip
 - **RDS:** `rds_tools`, `pg_repack` extensions
 - **Supabase:** `auth`, `storage`, `supabase_functions`, `cron`, `realtime`, `supabase_migrations`, `net`, `_supabase`, `graphql`, `graphql_public` schemas; `pg_net`, `pg_graphql`, `pg_repack`, `http`, `pg_stat_monitor`, `pgstattuple` extensions; `supabase_functions.hooks` event trigger
 - **AlloyDB:** `ai`, `google_ml`, `helpobj`, `perfsnap`, `pgsnap` schemas; `g_stats`, `google_columnar_engine`, `google_db_advisor`, `google_ml_integration` extensions
+
+---
+
+#### Source-Specific: Supabase RLS
+
+Supabase source databases typically have Row-Level Security on application tables. Without `BYPASSRLS`, the migration user reads zero rows from RLS-protected tables and the migration silently produces an incomplete target. Detect and fix on the source:
+
+```sql
+-- Find RLS-protected tables (run per schema)
+SELECT tablename, rowsecurity
+FROM pg_tables
+WHERE schemaname = '<schema_name>' AND rowsecurity = true;
+
+-- Fix (requires superuser on source)
+ALTER ROLE migration_user BYPASSRLS;
+```
+
+**When to flag:** Any migration from Supabase, or any source where `pg_tables.rowsecurity = true` exists in user schemas.
 
 ---
 
@@ -188,6 +210,32 @@ Wrapper that runs `run-migration.sh` inside a detached `screen` session named "m
 ---
 
 ### Monitoring
+
+#### `slack-migration-alerts.sh`
+
+Sends Slack alerts for migration events. Runs from cron (default every 2 min) and fires each alert exactly once. Requires `SLACK_WEBHOOK_URL` in `~/.env`.
+
+```bash
+~/slack-migration-alerts.sh --test         # send a test message to verify the webhook
+~/slack-migration-alerts.sh --setup        # install cron job (default every 2 min)
+~/slack-migration-alerts.sh --setup --interval N  # custom interval (1-59 min)
+~/slack-migration-alerts.sh --uninstall    # remove the cron job
+```
+
+**Alerts fired:**
+- Process stopped unexpectedly (fires once per running→stopped transition)
+- New ERROR lines in `migration.log` (fires once per new batch)
+- Initial copy completed — data, indexes, constraints, sequences, and post-data done; CDC phase is starting (fires once)
+- Migration completed successfully (fires once)
+- Migration failed with non-zero exit code (fires once)
+
+All alerts include the PlanetScale branch ID (parsed from `PGCOPYDB_TARGET_PGURI`) and migration progress context (tables, data GB, runtime). Alert messages do not include raw log content.
+
+**State file:** `$MIGRATION_DIR/.notify-state` — resets automatically when a new migration directory is created.
+
+**Webhook:** set `SLACK_WEBHOOK_URL` in `~/.env`
+
+---
 
 #### `check-migration-status.sh`
 
@@ -308,26 +356,21 @@ Cleans up pgcopydb replication artifacts on both source and target databases.
 
 #### `stop-cdc.sh`
 
-Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover.
+Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover. The script fetches the current WAL LSN from the source automatically, displays it, and prompts for confirmation before writing it to the sentinel.
 
 ```bash
-# Get the current source LSN
-psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
-
-# Set the endpoint
-~/stop-cdc.sh 41EBA/7C7A1AD8
-MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh 41EBA/7C7A1AD8  # explicit dir
+~/stop-cdc.sh
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
 ```
 
 **Cutover procedure:**
 1. Stop writes to the source database (maintenance mode, read-only, etc.)
-2. Get the current WAL LSN from the source
-3. Run `stop-cdc.sh` with that LSN
-4. Wait for `check-cdc-status.sh` to show the apply LSN has reached the endpoint
-5. pgcopydb exits cleanly
-6. Verify data on the target
-7. Switch application to the target
-8. Run `drop-replication-slots.sh` to clean up
+2. Run `stop-cdc.sh` — it fetches the current WAL LSN, shows it, and asks you to confirm
+3. Wait for `check-cdc-status.sh` to show `Apply LSN` has reached the `endpos` LSN confirmed in step 2; once pgcopydb exits, the script prints `*** MIGRATION IS NOT RUNNING ***`
+4. pgcopydb exits cleanly
+5. Verify data on the target
+6. Switch application to the target
+7. Run `drop-replication-slots.sh` to clean up
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
@@ -427,10 +470,11 @@ sqlite3 ~/migration_*/schema/filter.db \
    - Run ~/start-migration-screen.sh to begin
    - Monitor with ~/check-migration-status.sh (initial copy phase)
    - Monitor with ~/check-cdc-status.sh (CDC catch-up phase)
+   - Run ~/slack-migration-alerts.sh --setup to enable Slack alerts (optional)
 
 3. CUTOVER (when CDC is caught up)
    - Stop writes to source
-   - Run ~/stop-cdc.sh <LSN> to set the endpoint
+   - Run ~/stop-cdc.sh to set the endpoint
    - Wait for pgcopydb to finish applying and exit
    - Verify data on target
    - Switch application to target

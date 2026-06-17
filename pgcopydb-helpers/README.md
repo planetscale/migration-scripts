@@ -22,9 +22,14 @@ GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO migration_user;
 
 -- For future tables created before migration starts
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO migration_user;
+
+-- Prevent idle replication connection from being dropped during long COPY phases
+ALTER ROLE migration_user SET wal_sender_timeout = 0;
 ```
 
 Repeat the `GRANT USAGE`, `GRANT SELECT`, and `ALTER DEFAULT PRIVILEGES` statements for each schema being migrated.
+
+**`wal_sender_timeout`:** Setting this to `0` on the source prevents the replication slot from being dropped during long COPY phases. The initial data copy can take hours on large databases, and the default timeout (60s) may cause PostgreSQL to drop the idle replication connection before CDC streaming begins.
 
 **`fix-replica-identity.sh` permissions:** The script runs `ALTER TABLE ... REPLICA IDENTITY FULL` on the source, which requires table ownership — `SELECT` alone is not sufficient. Grant `migration_user` membership in the role(s) that own the tables so it inherits ownership privileges. First, find which owner roles are involved:
 
@@ -57,6 +62,21 @@ After running `fix-replica-identity.sh`, revoke the membership:
 REVOKE <owner_role> FROM migration_user;
 ```
 
+**Row-Level Security (RLS) — Supabase and other RLS-heavy sources:** If any source tables have RLS enabled, `migration_user` must bypass it — otherwise pgcopydb sees zero rows for those tables and the target ends up incomplete with no error. Check which tables use RLS (run per schema):
+
+```sql
+SELECT tablename, rowsecurity
+FROM pg_tables
+WHERE schemaname = '<schema_name>'
+  AND rowsecurity = true;
+```
+
+If any tables are returned, grant the bypass on the source (requires superuser):
+
+```sql
+ALTER ROLE migration_user BYPASSRLS;
+```
+
 **Logical replication (CDC only):** Logical replication must be enabled on the source before starting a `--follow` migration. How to enable it depends on your platform:
 
 - **Amazon RDS / Aurora:** Set `rds.logical_replication = 1` in the [parameter group](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.html) and reboot the instance. If you are using a custom parameter group, make sure it is associated with your instance. This change requires a reboot — it cannot be applied dynamically.
@@ -73,13 +93,6 @@ You can verify logical replication is enabled on any platform with:
 
 ```sql
 SHOW wal_level;  -- should return 'logical'
-```
-
-**`wal_sender_timeout`:** Set this to `0` on the source to prevent the replication slot from being dropped during long COPY phases. The initial data copy can take hours on large databases, and the default timeout (60s) may cause PostgreSQL to drop the idle replication connection before CDC streaming begins.
-
-```sql
-ALTER SYSTEM SET wal_sender_timeout = 0;
-SELECT pg_reload_conf();
 ```
 
 ### Target Database (PlanetScale)
@@ -105,6 +118,7 @@ SELECT pg_reload_conf();
    ```bash
    export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
    export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
+   export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
    ```
 
 3. **Customize `~/filters.ini`** to exclude schemas, tables, and extensions that should not be migrated. See [Filter Configuration](#filter-configuration) below.
@@ -125,7 +139,7 @@ Before starting the migration, compare PostgreSQL parameters between source and 
 ~/compare-pg-params.sh
 ```
 
-Run the preflight check to validate that both databases and the migration instance are ready. This checks connectivity, WAL level, replication permissions, available slots/senders, conflicting publications, and local prerequisites:
+Run the preflight check to validate that both databases and the migration instance are ready. This checks connectivity, WAL level, replication permissions, available slots/senders, conflicting publications, per-schema read permissions on objects that `~/filters.ini` will actually migrate (schemas and tables outside that scope are skipped), extension compatibility (source extensions present on target), and local prerequisites:
 
 ```bash
 ~/preflight-check.sh
@@ -172,21 +186,22 @@ Once the initial copy completes and CDC is streaming, check replication progress
 
 When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 MB), you are ready for cutover.
 
+To receive Slack alerts for migration events (errors, initial copy completion, success/failure), set up the monitor separately. Requires `SLACK_WEBHOOK_URL` in `~/.env`:
+
+```bash
+~/slack-migration-alerts.sh --test    # verify webhook before installing
+~/slack-migration-alerts.sh --setup   # install cron job (default every 2 min)
+```
+
 ### 4. Cut Over
 
 1. **Stop writes** to the source database (maintenance mode, read-only, connection drain, etc.).
 
-2. **Get the current WAL position** on the source:
+2. **Set the CDC endpoint** — the script fetches the current WAL LSN from the source, displays it, and asks for confirmation before applying:
 
    ```bash
-   psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();"
-   ```
-
-3. **Set the CDC endpoint** so pgcopydb stops after reaching that position:
-
-   ```bash
-   ~/stop-cdc.sh <LSN>
-   MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh <LSN>  # explicit dir
+   ~/stop-cdc.sh
+   MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
    ```
 
 4. **Wait** for pgcopydb to apply all remaining changes and exit. Monitor with `check-cdc-status.sh`.
@@ -196,6 +211,8 @@ When `check-cdc-status.sh` reports **"CDC IS CAUGHT UP"** (apply backlog < 100 M
    ```bash
    ~/verify-migration.sh
    ```
+
+   The script reads `~/filters.ini` and scopes its checks to the objects the migration actually copied, so schemas, tables, and extensions you excluded (for example Supabase's `auth`, `storage`, and `realtime` schemas) are not reported as missing. A `filters.ini` is required — verify must use the same scope the migration ran with — so the script errors out if one is not found; pass `--filters <path>` to use a file in a non-default location.
 
 6. **Switch** your application to the PlanetScale target.
 
@@ -256,7 +273,7 @@ extension_to_skip
 trigger_to_skip
 ```
 
-**Available sections:** `[exclude-schema]`, `[exclude-table]`, `[exclude-extension]`, `[exclude-event-trigger]`, `[include-only-schema]`, `[include-only-table]`. The `include-only` sections are mutually exclusive with the `exclude` sections.
+**Available sections:** `[exclude-schema]`, `[exclude-table]`, `[exclude-extension]`, `[exclude-event-trigger]`, `[include-only-schema]`, `[include-only-table]`. The `include-only` sections are mutually exclusive with the `exclude` sections — pgcopydb rejects `include-only-table` combined with `exclude-schema`/`exclude-table`, and `include-only-schema` combined with `exclude-schema`. `preflight-check.sh` emits a `[WARN]` if it detects one of these combinations.
 
 **Important:** No comments are allowed inside sections — pgcopydb parses `#` lines as object names. Place all comments before the first section.
 
@@ -391,13 +408,14 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | Script | Phase | Description |
 |--------|-------|-------------|
 | `compare-pg-params.sh` | Prepare | Compare PostgreSQL parameters between source and target |
-| `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots) |
+| `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots, extension compatibility) |
 | `fix-replica-identity.sh` | Prepare | Set REPLICA IDENTITY FULL on tables without primary keys |
 | `filters.ini` | Prepare | pgcopydb filter configuration |
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
-| `start-migration-screen.sh` | Migrate | Run the migration in a screen session |
+| `start-migration-screen.sh` | Migrate | Run the migration in a detached screen session. |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
+| `slack-migration-alerts.sh` | Monitor | Slack alerts |
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
 | `resume-cdc.sh` | Recovery | Resume only the CDC phase (skips clone) |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |

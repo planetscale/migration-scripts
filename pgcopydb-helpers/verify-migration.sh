@@ -17,10 +17,11 @@
 #   --row-count-tolerance <pct>   Allowed % difference for row estimates (default: 5)
 #   --spot-check-tables <n>       Number of largest tables to spot-check (default: 20)
 #   --no-spot-check               Skip min/max spot-check (fastest mode)
-#   --schemas <s1,s2,...>         Only check these schemas (default: all non-system)
 #   --exact-count-tables <n>      Random tables to exact-count (default: 10, 0=skip)
 #   --exact-count-max-gb <n>      Max table size in GB for exact count (default: 10)
 #   --exact-count-timeout <s>     Per-table COUNT(*) timeout in seconds (default: 120)
+#   --filters <path>              Path to filters.ini (default: ~/filters.ini). Required —
+#                                 verify scopes to the same object set the migration used.
 # =============================================================================
 
 set -uo pipefail
@@ -51,10 +52,10 @@ PASS=0; FAIL=0; WARN=0
 ROW_TOLERANCE=5
 SPOT_CHECK_N=20
 NO_SPOT_CHECK=false
-SCHEMA_FILTER=""       # empty = all non-system schemas
 EXACT_COUNT_N=10       # number of random tables to exact-count
 EXACT_COUNT_MAX_GB=10  # tables larger than this are skipped
 EXACT_COUNT_TIMEOUT=120
+FILTERS_FILE=~/filters.ini  # scope checks to objects this filter migrates
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 usage() {
@@ -94,29 +95,141 @@ line_count() { printf '%s' "${1:-}" | grep -c . || true; }
 # Absolute value
 abs() { local v=$1; echo "${v#-}"; }
 
+# ── filters.ini scope helpers ─────────────────────────────────────────────────
+# The migration only copies the subset of objects allowed by ~/filters.ini.
+# Without this awareness, intentionally-excluded objects (e.g. Supabase's auth,
+# storage, realtime schemas) show up as "missing in target" — false-positive
+# noise. These helpers mirror preflight-check.sh's interpretation of filters.ini.
+
+# Parse scope-relevant sections from filters.ini into global arrays
+parse_filters_ini() {
+    local ini_file="$1"
+    FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
+    FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
+    FILTER_EXCLUDE_EXTENSIONS=()
+    local section="" line
+    while IFS= read -r line; do
+        line="${line#"${line%%[![:space:]]*}"}"   # ltrim
+        line="${line%"${line##*[![:space:]]}"}"   # rtrim
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        if [[ "$line" =~ ^\[(.+)\]$ ]]; then section="${BASH_REMATCH[1]}"; continue; fi
+        case "$section" in
+            exclude-schema)      FILTER_EXCLUDE_SCHEMAS+=("$line")      ;;
+            exclude-table)       FILTER_EXCLUDE_TABLES+=("$line")       ;;
+            include-only-table)  FILTER_INCLUDE_ONLY_TABLES+=("$line")  ;;
+            include-only-schema) FILTER_INCLUDE_ONLY_SCHEMAS+=("$line") ;;
+            exclude-extension)   FILTER_EXCLUDE_EXTENSIONS+=("$line")   ;;
+        esac
+    done < "$ini_file"
+}
+
+# Returns the effective filter mode: include-table | include-schema | exclude-schema | all
+filter_scope_mode() {
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ]  && { echo "include-table";  return; }
+    [ ${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} -gt 0 ] && { echo "include-schema"; return; }
+    [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ]      && { echo "exclude-schema"; return; }
+    echo "all"
+}
+
+# Formats values as a SQL-safe single-quoted comma list: 'a','b','c'
+_sql_list() {
+    local result="" v sq="'"
+    for v in "$@"; do
+        v="${v//$sq/$sq$sq}"
+        result="${result:+$result,}'${v}'"
+    done
+    echo "$result"
+}
+
+# Build SQL-quoted list of unique schema names extracted from "schema.table" entries
+_it_schema_sql_list() {
+    local result="" sq="'"
+    while IFS= read -r s; do
+        s="${s//$sq/$sq$sq}"
+        result="${result:+$result,}'${s}'"
+    done < <(printf '%s\n' "$@" | cut -d. -f1 | sort -u)
+    echo "$result"
+}
+
+# schema_clause <schema-column-expr> — "AND <col> IN/NOT IN (...)" or "" for all mode.
+# Applied to every object type so excluded/included schemas scope the whole comparison.
+schema_clause() {
+    local col="$1" mode list
+    mode=$(filter_scope_mode)
+    case "$mode" in
+        include-table)  list=$(_it_schema_sql_list "${FILTER_INCLUDE_ONLY_TABLES[@]}"); echo "AND ${col} IN (${list})" ;;
+        include-schema) list=$(_sql_list "${FILTER_INCLUDE_ONLY_SCHEMAS[@]}");          echo "AND ${col} IN (${list})" ;;
+        exclude-schema) list=$(_sql_list "${FILTER_EXCLUDE_SCHEMAS[@]}");               echo "AND ${col} NOT IN (${list})" ;;
+        all)            echo "" ;;
+    esac
+}
+
+# table_clause <schema-col> <rel-col> — restricts table-keyed checks to the
+# in-scope table set. " AND (<schema>.<rel>) IN/NOT IN (...)" or "".
+table_clause() {
+    local scol="$1" rcol="$2" mode
+    mode=$(filter_scope_mode)
+    if [ "$mode" = "include-table" ]; then
+        echo " AND (${scol} || '.' || ${rcol}) IN ($(_sql_list "${FILTER_INCLUDE_ONLY_TABLES[@]}"))"
+    elif [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ]; then
+        echo " AND (${scol} || '.' || ${rcol}) NOT IN ($(_sql_list "${FILTER_EXCLUDE_TABLES[@]}"))"
+    else
+        echo ""
+    fi
+}
+
+# extension_clause <extname-col> — excludes [exclude-extension] entries, or "".
+extension_clause() {
+    local col="$1"
+    [ ${#FILTER_EXCLUDE_EXTENSIONS[@]} -eq 0 ] && { echo ""; return; }
+    echo "AND ${col} NOT IN ($(_sql_list "${FILTER_EXCLUDE_EXTENSIONS[@]}"))"
+}
+
+# Human-readable one-line summary of the active scope
+filter_scope_describe() {
+    case "$(filter_scope_mode)" in
+        include-table)  echo "include-only-table (${#FILTER_INCLUDE_ONLY_TABLES[@]} table(s))" ;;
+        include-schema) echo "include-only-schema (${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} schema(s))" ;;
+        exclude-schema) echo "exclude-schema (${#FILTER_EXCLUDE_SCHEMAS[@]} schema(s))$([ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ] && echo " + exclude-table (${#FILTER_EXCLUDE_TABLES[@]})")" ;;
+        all)            [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ] && { echo "exclude-table (${#FILTER_EXCLUDE_TABLES[@]} table(s))"; return; }; echo "none" ;;
+    esac
+}
+
+# Arrays must exist before any helper references them (set -u)
+FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
+FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
+FILTER_EXCLUDE_EXTENSIONS=()
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --row-count-tolerance)  ROW_TOLERANCE="$2"; shift 2 ;;
         --spot-check-tables)    SPOT_CHECK_N="$2"; shift 2 ;;
         --no-spot-check)        NO_SPOT_CHECK=true; shift ;;
-        --schemas)              SCHEMA_FILTER="$2"; shift 2 ;;
         --exact-count-tables)   EXACT_COUNT_N="$2"; shift 2 ;;
         --exact-count-max-gb)   EXACT_COUNT_MAX_GB="$2"; shift 2 ;;
         --exact-count-timeout)  EXACT_COUNT_TIMEOUT="$2"; shift 2 ;;
+        --filters)              FILTERS_FILE="$2"; shift 2 ;;
         -h|--help)              usage ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
 done
 
-# Build schema exclusion / inclusion clause used in most queries
-if [[ -n "$SCHEMA_FILTER" ]]; then
-    # Convert comma list → SQL IN list
-    SCHEMA_SQL_FILTER="AND n.nspname IN ($(echo "$SCHEMA_FILTER" | sed "s/,/','/g; s/^/'/; s/$/'/" ))"
-    SCHEMA_SQL_FILTER_PLAIN="AND table_schema IN ($(echo "$SCHEMA_FILTER" | sed "s/,/','/g; s/^/'/; s/$/'/" ))"
+# Always-required system-schema exclusion (independent of filters.ini)
+SCHEMA_SQL_FILTER="AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')"
+SCHEMA_SQL_FILTER_PLAIN="AND table_schema NOT IN ('pg_catalog','information_schema','pg_toast')"
+
+# Load filters.ini so checks are scoped to the exact object set the migration copied.
+# filters.ini is required: verify must use the same scope the migration ran with, so the
+# same file governs both.
+if [[ -f "$FILTERS_FILE" ]]; then
+    parse_filters_ini "$FILTERS_FILE"
+    FILTER_DESC="$FILTERS_FILE — $(filter_scope_describe)"
 else
-    SCHEMA_SQL_FILTER="AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')"
-    SCHEMA_SQL_FILTER_PLAIN="AND table_schema NOT IN ('pg_catalog','information_schema','pg_toast')"
+    echo -e "${RED}Error:${NC} filters.ini not found at ${FILTERS_FILE}" >&2
+    echo "  verify-migration.sh scopes its checks to the same object set the migration" >&2
+    echo "  used, so a filters.ini is required. Create ~/filters.ini, or pass --filters <path>." >&2
+    exit 1
 fi
 
 # ── Prerequisite check ────────────────────────────────────────────────────────
@@ -135,6 +248,7 @@ echo -e "  Source : ${CYAN}$(echo "$SOURCE_CONN" | sed 's/:\/\/[^:]*:[^@]*@/:\/\
 echo -e "  Target : ${CYAN}$(echo "$TARGET_CONN" | sed 's/:\/\/[^:]*:[^@]*@/:\/\/***:***@/')${NC}"
 echo -e "  Time   : $(date)"
 echo -e "  Options: row_tolerance=${ROW_TOLERANCE}%  spot_check_tables=${SPOT_CHECK_N}"
+echo -e "  Filters: ${CYAN}${FILTER_DESC}${NC}"
 
 # =============================================================================
 # 1. CONNECTIONS
@@ -145,7 +259,7 @@ log_section "1/11  CONNECTION TEST"
 echo -n "  Testing source connection... "
 if SRC_PING=$(psql "$SOURCE_CONN" -t -A -c "SELECT version()" 2>&1); then
     log_pass "Source DB connected"
-    SRC_VER=$(echo "$SRC_PING" | head -1)
+    SRC_VER=$(echo "$SRC_PING" | grep -Ev '^(WARNING|DETAIL|HINT|NOTICE):' | head -1)
 else
     echo ""
     log_fail "Cannot connect to source DB — psql error:"
@@ -156,7 +270,7 @@ fi
 echo -n "  Testing target connection... "
 if TGT_PING=$(psql "$TARGET_CONN" -t -A -c "SELECT version()" 2>&1); then
     log_pass "Target DB connected"
-    TGT_VER=$(echo "$TGT_PING" | head -1)
+    TGT_VER=$(echo "$TGT_PING" | grep -Ev '^(WARNING|DETAIL|HINT|NOTICE):' | head -1)
 else
     echo ""
     log_fail "Cannot connect to target DB — psql error:"
@@ -172,10 +286,11 @@ TGT_DB=$(q "$TARGET_CONN" "SELECT current_database()")
 log_info "Source DB name: $SRC_DB  |  Target DB name: $TGT_DB"
 
 # Sanity-check that catalog queries actually work on the source
-SRC_SANITY=$(psql "$SOURCE_CONN" -t -A -c "SELECT count(*) FROM pg_class" 2>&1)
+SRC_SANITY_RAW=$(psql "$SOURCE_CONN" -t -A -c "SELECT count(*) FROM pg_class" 2>&1)
+SRC_SANITY=$(echo "$SRC_SANITY_RAW" | grep -E '^[0-9]+$' | tail -1)
 if ! [[ "$SRC_SANITY" =~ ^[0-9]+$ ]]; then
     log_fail "Source DB catalog query failed — all results below will be empty/wrong"
-    echo "       psql output: $SRC_SANITY" | head -5
+    echo "       psql output: $SRC_SANITY_RAW" | head -5
     log_warn "Check: SSL mode, IAM auth, search_path, or pg_hba.conf on the source"
     exit 1
 fi
@@ -191,6 +306,7 @@ TABLE_QUERY="
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind = 'r' $SCHEMA_SQL_FILTER
+    $(schema_clause "n.nspname") $(table_clause "n.nspname" "c.relname")
     ORDER BY 1"
 
 SRC_TABLES=$(q "$SOURCE_CONN" "$TABLE_QUERY")
@@ -238,6 +354,7 @@ COL_QUERY="
         || '  default=' || COALESCE(column_default, 'NULL')
     FROM information_schema.columns
     WHERE true $SCHEMA_SQL_FILTER_PLAIN
+    $(schema_clause "table_schema") $(table_clause "table_schema" "table_name")
     ORDER BY table_schema, table_name, ordinal_position"
 
 SRC_COLS=$(q "$SOURCE_CONN" "$COL_QUERY")
@@ -270,7 +387,7 @@ IDX_QUERY="
     FROM pg_indexes
     WHERE true
     AND schemaname NOT IN ('pg_catalog','information_schema','pg_toast')
-    $( [[ -n "$SCHEMA_FILTER" ]] && echo "AND schemaname IN ($(echo "$SCHEMA_FILTER" | sed "s/,/','/g; s/^/'/; s/$/'/" ))" || true )
+    $(schema_clause "schemaname") $(table_clause "schemaname" "tablename")
     ORDER BY 1"
 
 SRC_IDX=$(q "$SOURCE_CONN" "$IDX_QUERY")
@@ -300,6 +417,7 @@ CON_QUERY="
     JOIN pg_class t     ON t.oid = c.conrelid
     JOIN pg_namespace n ON n.oid = t.relnamespace
     WHERE true $SCHEMA_SQL_FILTER
+    $(schema_clause "n.nspname") $(table_clause "n.nspname" "t.relname")
     ORDER BY 1"
 
 SRC_CON=$(q "$SOURCE_CONN" "$CON_QUERY")
@@ -322,7 +440,7 @@ VIEW_QUERY="
     SELECT schemaname || '.' || viewname
     FROM pg_views
     WHERE schemaname NOT IN ('pg_catalog','information_schema')
-    $( [[ -n "$SCHEMA_FILTER" ]] && echo "AND schemaname IN ($(echo "$SCHEMA_FILTER" | sed "s/,/','/g; s/^/'/; s/$/'/" ))" || true )
+    $(schema_clause "schemaname")
     ORDER BY 1"
 
 SRC_VIEWS=$(q "$SOURCE_CONN" "$VIEW_QUERY")
@@ -348,6 +466,7 @@ FUNC_QUERY="
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE true $SCHEMA_SQL_FILTER
+    $(schema_clause "n.nspname")
     ORDER BY 1"
 
 SRC_FUNCS=$(q "$SOURCE_CONN" "$FUNC_QUERY")
@@ -373,6 +492,7 @@ ROWCNT_QUERY="
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind = 'r' $SCHEMA_SQL_FILTER
+    $(schema_clause "n.nspname") $(table_clause "n.nspname" "c.relname")
     ORDER BY c.reltuples DESC"
 
 SRC_ROWCNTS=$(q "$SOURCE_CONN" "$ROWCNT_QUERY")
@@ -387,11 +507,11 @@ while IFS=$'\t' read -r tbl src_n tgt_n; do
         diff=$(abs $((src_n - tgt_n)))
         pct=$(( diff * 100 / src_n ))
         if [[ $pct -gt $ROW_TOLERANCE ]]; then
-            RC_MISMATCH_OUT+="$(printf "       %-55s  src=%12d  tgt=%12d  diff=%d%%\n" "$tbl" "$src_n" "$tgt_n" "$pct")"
+            RC_MISMATCH_OUT+="$(printf "       %-55s  src=%12d  tgt=%12d  diff=%d%%" "$tbl" "$src_n" "$tgt_n" "$pct")"$'\n'
             RC_MISMATCH_COUNT=$(( RC_MISMATCH_COUNT + 1 ))
         fi
     elif [[ "${tgt_n:-0}" -ne 0 ]]; then
-        RC_MISMATCH_OUT+="$(printf "       %-55s  src=%12d  tgt=%12d  diff=src_empty_tgt_not\n" "$tbl" "$src_n" "$tgt_n")"
+        RC_MISMATCH_OUT+="$(printf "       %-55s  src=%12d  tgt=%12d  diff=src_empty_tgt_not" "$tbl" "$src_n" "$tgt_n")"$'\n'
         RC_MISMATCH_COUNT=$(( RC_MISMATCH_COUNT + 1 ))
     fi
 done < <(join -t$'\t' \
@@ -417,6 +537,7 @@ SEQ_QUERY="
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind = 'S' $SCHEMA_SQL_FILTER
+    $(schema_clause "n.nspname")
     ORDER BY 1"
 
 SRC_SEQS=$(q "$SOURCE_CONN" "$SEQ_QUERY")
@@ -435,6 +556,7 @@ SEQ_VAL_QUERY="
     SELECT schemaname || '.' || sequencename, last_value
     FROM pg_sequences
     WHERE schemaname NOT IN ('pg_catalog','information_schema')
+    $(schema_clause "schemaname")
     ORDER BY 1"
 
 SRC_SEQVALS=$(q "$SOURCE_CONN" "$SEQ_VAL_QUERY")
@@ -481,6 +603,7 @@ else
         WHERE c.contype = 'p'
           AND array_length(c.conkey, 1) = 1
           $SCHEMA_SQL_FILTER
+          $(schema_clause "n.nspname") $(table_clause "n.nspname" "t.relname")
         ORDER BY sz.reltuples DESC
         LIMIT $SPOT_CHECK_N"
 
@@ -546,6 +669,7 @@ else
         WHERE c.relkind = 'r'
           AND pg_total_relation_size(c.oid) BETWEEN 1 AND ${EXACT_MAX_BYTES}
           $SCHEMA_SQL_FILTER
+          $(schema_clause "n.nspname") $(table_clause "n.nspname" "c.relname")
         ORDER BY random()
         LIMIT ${EXACT_COUNT_N}"
 
@@ -626,7 +750,8 @@ fi
 # =============================================================================
 log_section "BONUS  EXTENSIONS"
 
-EXT_QUERY="SELECT extname || '  version=' || extversion FROM pg_extension ORDER BY 1"
+EXT_QUERY="SELECT extname || '  version=' || extversion FROM pg_extension
+    WHERE true $(extension_clause "extname") ORDER BY 1"
 SRC_EXT=$(q "$SOURCE_CONN" "$EXT_QUERY")
 TGT_EXT=$(q "$TARGET_CONN" "$EXT_QUERY")
 

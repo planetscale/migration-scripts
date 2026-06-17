@@ -67,6 +67,98 @@ tgt_query() {
     psql "$PGCOPYDB_TARGET_PGURI" -t -A -c "$1" 2>/dev/null || echo ""
 }
 
+# ── Filter scope helpers ─────────────────────────────────────────────
+
+# Parse scope-relevant sections from filters.ini into global arrays
+parse_filters_ini() {
+    local ini_file="$1"
+    FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
+    FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
+    local section="" line
+    while IFS= read -r line; do
+        line="${line#"${line%%[![:space:]]*}"}"   # ltrim
+        line="${line%"${line##*[![:space:]]}"}"   # rtrim
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        if [[ "$line" =~ ^\[(.+)\]$ ]]; then section="${BASH_REMATCH[1]}"; continue; fi
+        case "$section" in
+            exclude-schema)      FILTER_EXCLUDE_SCHEMAS+=("$line")      ;;
+            exclude-table)       FILTER_EXCLUDE_TABLES+=("$line")       ;;
+            include-only-table)  FILTER_INCLUDE_ONLY_TABLES+=("$line")  ;;
+            include-only-schema) FILTER_INCLUDE_ONLY_SCHEMAS+=("$line") ;;
+        esac
+    done < "$ini_file"
+}
+
+# Returns the effective filter mode: include-table | include-schema | exclude-schema | all
+filter_scope_mode() {
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ] && { echo "include-table";  return; }
+    [ ${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} -gt 0 ] && { echo "include-schema"; return; }
+    [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ]      && { echo "exclude-schema"; return; }
+    echo "all"
+}
+
+# Formats values as a SQL-safe single-quoted comma list: 'a','b','c'
+_sql_list() {
+    local result="" v sq="'"
+    for v in "$@"; do
+        v="${v//$sq/$sq$sq}"
+        result="${result:+$result,}'${v}'"
+    done
+    echo "$result"
+}
+
+# Build SQL-quoted list of unique schema names extracted from "schema.table" entries
+_it_schema_sql_list() {
+    local result="" sq="'"
+    while IFS= read -r s; do
+        s="${s//$sq/$sq$sq}"
+        result="${result:+$result,}'${s}'"
+    done < <(printf '%s\n' "$@" | cut -d. -f1 | sort -u)
+    echo "$result"
+}
+
+# Returns "AND n.nspname IN/NOT IN (...)" SQL fragment, or "" for all mode
+build_schema_where() {
+    local mode list
+    mode=$(filter_scope_mode)
+    case "$mode" in
+        include-table)  list=$(_it_schema_sql_list "${FILTER_INCLUDE_ONLY_TABLES[@]}") ;;
+        include-schema) list=$(_sql_list "${FILTER_INCLUDE_ONLY_SCHEMAS[@]}") ;;
+        exclude-schema) list=$(_sql_list "${FILTER_EXCLUDE_SCHEMAS[@]}") ;;
+        all)            echo ""; return ;;
+    esac
+    local op="IN"; [ "$mode" = "exclude-schema" ] && op="NOT IN"
+    echo "AND n.nspname ${op} (${list})"
+}
+
+# Returns SQL fragment to append to table-count sub-queries (starts with " AND"), or ""
+build_table_filter() {
+    local mode
+    mode=$(filter_scope_mode)
+    if [ "$mode" = "include-table" ]; then
+        echo " AND (n.nspname || '.' || c.relname) IN ($(_sql_list "${FILTER_INCLUDE_ONLY_TABLES[@]}"))"
+    elif [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ]; then
+        echo " AND (n.nspname || '.' || c.relname) NOT IN ($(_sql_list "${FILTER_EXCLUDE_TABLES[@]}"))"
+    else
+        echo ""
+    fi
+}
+
+# Lists disallowed section combinations present in filters.ini (pgcopydb rejects these), or ""
+filter_conflicts() {
+    local c=()
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-table + exclude-schema")
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ]  && c+=("include-only-table + exclude-table")
+    [ ${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-schema + exclude-schema")
+    local IFS="; "; echo "${c[*]:-}"
+}
+
+# ── Pre-parse filters.ini (scope needed for source permission checks) ─
+FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
+FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
+
+[ -f ~/filters.ini ] && parse_filters_ini ~/filters.ini
+
 # ══════════════════════════════════════════════════════════════════
 NOW=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
@@ -190,25 +282,44 @@ else
     fail "DB connect privilege" "$SRC_USER lacks CONNECT — run: GRANT CONNECT ON DATABASE <db> TO $SRC_USER"
 fi
 
-# Per-schema: USAGE + SELECT on tables/sequences (pg_catalog only)
-SCHEMA_PERMS=$(src_query "SELECT n.nspname, has_schema_privilege(current_user, n.nspname, 'USAGE'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'r'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'r' AND NOT has_table_privilege(current_user, c.oid, 'SELECT')), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S' AND NOT has_sequence_privilege(current_user, c.oid, 'SELECT')) FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' ORDER BY n.nspname;")
+# Per-schema: USAGE + SELECT on tables/mat views/sequences, scoped to what filters.ini will migrate
+_schema_where=$(build_schema_where)
+_table_filter=$(build_table_filter)
+[ "$(filter_scope_mode)" = "include-table" ] && _check_seqs=false || _check_seqs=true
+
+if [ "$_check_seqs" = "true" ]; then
+    _seq_total="(SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S')"
+    _seq_missing="(SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S' AND NOT has_sequence_privilege(current_user, c.oid, 'SELECT'))"
+else
+    _seq_total="0"; _seq_missing="0"
+fi
+
+# How many of the missing-SELECT relations are matviews (relkind 'm'), reported separately.
+_mv_missing="(SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'm'${_table_filter} AND NOT has_table_privilege(current_user, c.oid, 'SELECT'))"
+
+SCHEMA_PERMS=$(src_query "SELECT n.nspname, has_schema_privilege(current_user, n.nspname, 'USAGE'), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind IN ('r', 'm')${_table_filter}), (SELECT COUNT(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind IN ('r', 'm')${_table_filter} AND NOT has_table_privilege(current_user, c.oid, 'SELECT')), ${_seq_total}, ${_seq_missing}, ${_mv_missing} FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' ${_schema_where} ORDER BY n.nspname;")
 
 if [ -z "$SCHEMA_PERMS" ]; then
     warn "Schema read permissions" "no non-system schemas found or query failed"
 else
-    while IFS='|' read -r schema usage_ok total_tables tables_missing total_seqs seqs_missing; do
+    while IFS='|' read -r schema usage_ok total_tables tables_missing total_seqs seqs_missing mvs_missing; do
         [ -z "$schema" ] && continue
         label="Read perms: $schema"
+        mv_note=""; [ "${mvs_missing:-0}" -gt 0 ] && mv_note=" (incl. ${mvs_missing} materialized view(s))"
         if [ "$usage_ok" = "f" ]; then
             fail "$label" "no USAGE on schema — run: GRANT USAGE ON SCHEMA $schema TO $SRC_USER"
         elif [ "${tables_missing:-0}" -gt 0 ] && [ "${seqs_missing:-0}" -gt 0 ]; then
-            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables, ${seqs_missing}/${total_seqs} sequences"
+            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables${mv_note}, ${seqs_missing}/${total_seqs} sequences"
         elif [ "${tables_missing:-0}" -gt 0 ]; then
-            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables — run: GRANT SELECT ON ALL TABLES IN SCHEMA $schema TO $SRC_USER"
+            fail "$label" "missing SELECT on ${tables_missing}/${total_tables} tables${mv_note} — run: GRANT SELECT ON ALL TABLES IN SCHEMA $schema TO $SRC_USER;"
         elif [ "${seqs_missing:-0}" -gt 0 ]; then
             fail "$label" "missing SELECT on ${seqs_missing}/${total_seqs} sequences — run: GRANT SELECT ON ALL SEQUENCES IN SCHEMA $schema TO $SRC_USER"
         else
-            pass "$label" "USAGE + SELECT on ${total_tables} tables, ${total_seqs} sequences"
+            if [ "${total_seqs:-0}" -gt 0 ]; then
+                pass "$label" "USAGE + SELECT on ${total_tables} tables, ${total_seqs} sequences"
+            else
+                pass "$label" "USAGE + SELECT on ${total_tables} tables"
+            fi
         fi
     done <<< "$SCHEMA_PERMS"
 fi
@@ -247,6 +358,34 @@ if [ -n "$TGT_VER" ]; then
     else
         pass "Existing pgcopydb schema" "none"
     fi
+
+    # 14. Extension compatibility
+    FILTER_EXCLUDED_EXTS=""
+    if [ -f ~/filters.ini ]; then
+        FILTER_EXCLUDED_EXTS=$(awk '/^\[exclude-extension\]/{found=1; next} /^\[/{found=0} found && /[^[:space:]]/{gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}' ~/filters.ini)
+    fi
+
+    SRC_EXTS=$(src_query "SELECT extname FROM pg_extension ORDER BY extname;")
+    TGT_AVAIL_EXTS=$(tgt_query "SELECT name FROM pg_available_extensions ORDER BY name;")
+    MISSING_EXTS=""
+    CHECKED_COUNT=0
+    while IFS= read -r ext; do
+        [ -z "$ext" ] && continue
+        if printf '%s\n' "$FILTER_EXCLUDED_EXTS" | grep -qx "$ext"; then
+            continue
+        fi
+        CHECKED_COUNT=$((CHECKED_COUNT + 1))
+        if ! printf '%s\n' "$TGT_AVAIL_EXTS" | grep -qx "$ext"; then
+            MISSING_EXTS="${MISSING_EXTS:+$MISSING_EXTS, }$ext"
+        fi
+    done <<< "$SRC_EXTS"
+    if [ -n "$MISSING_EXTS" ]; then
+        fail "Extensions" "not available on target: $MISSING_EXTS"
+    elif [ "$CHECKED_COUNT" -gt 0 ]; then
+        pass "Extensions" "all $CHECKED_COUNT source extension(s) available on target"
+    else
+        pass "Extensions" "no extensions to check"
+    fi
 fi
 
 # ── MIGRATION INSTANCE ─────────────────────────────────────────────
@@ -257,19 +396,21 @@ echo "  ────────────────────────
 # 14. filters.ini
 if [ -f ~/filters.ini ]; then
     pass "filters.ini" "~/filters.ini found"
+    _conflicts=$(filter_conflicts)
+    [ -n "$_conflicts" ] && warn "filters.ini combination" "$_conflicts — pgcopydb disallows these together"
 else
     fail "filters.ini" "~/filters.ini not found"
 fi
 
 # 15. pgcopydb binary
 PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || echo "")
-if [ -z "$PGCOPYDB_BIN" ] && [ -x /usr/lib/postgresql/17/bin/pgcopydb ]; then
-    PGCOPYDB_BIN="/usr/lib/postgresql/17/bin/pgcopydb"
+if [ -z "$PGCOPYDB_BIN" ]; then
+    PGCOPYDB_BIN=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1 || true)
 fi
-if [ -n "$PGCOPYDB_BIN" ]; then
+if [ -n "$PGCOPYDB_BIN" ] && [ -x "$PGCOPYDB_BIN" ]; then
     pass "pgcopydb binary" "$PGCOPYDB_BIN"
 else
-    fail "pgcopydb binary" "not found on PATH or /usr/lib/postgresql/17/bin/"
+    fail "pgcopydb binary" "not found on PATH or under /usr/lib/postgresql/*/bin/"
 fi
 
 # ── Summary ────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ screen -dmS migration bash -c '~/run-migration.sh; echo "Press enter to exit."; 
 
 echo "Migration started in screen session 'migration'"
 echo ""
-echo "To watch: screen -r migration"
-echo "To detach: Ctrl-A then D"
+echo "To watch:        screen -r migration"
+echo "To detach:       Ctrl-A then D"
 echo "To check status: ~/check-migration-status.sh"
+echo "────────────────────────────────────────────────────────"
