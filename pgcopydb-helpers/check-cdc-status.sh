@@ -23,9 +23,8 @@ if [ -z "$MIGRATION_DIR" ]; then
     exit 1
 fi
 
-# Find the latest resume log (or migration.log)
-RESUME_LOG=$(ls -t "$MIGRATION_DIR"/resume-*.log 2>/dev/null | head -1 || true)
-LOG="${RESUME_LOG:-$MIGRATION_DIR/migration.log}"
+# All phases (clone, resume, resume-cdc) append to migration.log
+LOG="$MIGRATION_DIR/migration.log"
 
 # --- 1. Process check ---
 PROCS=$(pgrep -a pgcopydb 2>/dev/null || true)

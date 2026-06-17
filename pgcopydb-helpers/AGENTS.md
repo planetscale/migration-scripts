@@ -307,7 +307,7 @@ Resumes only the CDC phase of a previously interrupted migration using `pgcopydb
 MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                # specify explicitly
 ```
 
-**When to use:** After the initial COPY completed successfully but CDC was interrupted (crash, reboot, connection drop). If you are unsure whether COPY finished, use `resume-migration.sh` instead — it will resume from wherever pgcopydb left off. Logs are written to `resume-cdc-TIMESTAMP.log` in the migration directory.
+**When to use:** After the initial COPY completed successfully but CDC was interrupted (crash, reboot, connection drop). If you are unsure whether COPY finished, use `resume-migration.sh` instead — it will resume from wherever pgcopydb left off. Output is appended to `migration.log` in the migration directory, consistent with `run-migration.sh` and `resume-migration.sh`.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, existing migration directory with completed COPY
 
@@ -412,7 +412,7 @@ Example end-of-run summary:
 - Search for `Splitting` or `split` to see table partitioning decisions
 - Search for `s_depend` or `pg_depend` to verify extension filtering
 - Check the exit code at the end: `Exit code: 0` means success
-- If resume logs exist (`resume-*.log`), check those too — they contain output from `resume-migration.sh` runs
+- All phases append to the same `migration.log` — `run-migration.sh`, `resume-migration.sh`, and `resume-cdc.sh` each write a timestamped banner, so a single file holds the full history for the migration
 
 When asking for help with a failed migration, share the full log or at minimum the last 100 lines and any ERROR lines.
 
