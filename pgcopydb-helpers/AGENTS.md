@@ -150,6 +150,14 @@ trigger_to_skip
 
 ---
 
+#### `filters-lib.sh`
+
+Shared Bash library that parses `~/filters.ini` and turns the active filter into SQL scope fragments. **Sourced, not executed** — it defines functions and has no standalone behavior. `preflight-check.sh` and `verify-migration.sh` both source it (via `source "$SCRIPT_DIR/filters-lib.sh"`), so they interpret the filter identically: preflight scopes its per-schema permission checks to what *will* migrate, and verify scopes its source-vs-target comparison to what *was* migrated.
+
+**Key functions:** `parse_filters_ini <path>` (populates `FILTER_*` arrays from `[exclude-schema]`, `[exclude-table]`, `[include-only-schema]`, `[include-only-table]`, `[exclude-extension]`), `filter_scope_mode` (precedence: `include-only-table` > `include-only-schema` > `exclude-schema` > `all`), `schema_clause <col>` / `table_clause <schema-col> <rel-col>` / `extension_clause <col>` (emit `AND ... IN/NOT IN (...)` fragments for any catalog column), `filter_scope_describe` (header summary), and `filter_conflicts` (pgcopydb-disallowed section combinations).
+
+---
+
 #### Source-Specific: Supabase RLS
 
 Supabase source databases typically have Row-Level Security on application tables. Without `BYPASSRLS`, the migration user reads zero rows from RLS-protected tables and the migration silently produces an incomplete target. Detect and fix on the source:
