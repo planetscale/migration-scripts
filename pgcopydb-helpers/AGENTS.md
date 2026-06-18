@@ -34,6 +34,8 @@ Compares performance-relevant PostgreSQL parameters between source and target da
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
+
 ---
 
 #### `verify-migration.sh`
@@ -75,7 +77,7 @@ Verifies that all data was copied correctly from source to target after a migrat
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
-**Read-only** — makes no modifications to either database.
+**Read-only** — connects with `default_transaction_read_only=on`; makes no modifications to either database. No global statement timeout: exact-count `COUNT(*)` queries set their own via `--exact-count-timeout`.
 
 ---
 
@@ -98,7 +100,7 @@ Validates all migration prerequisites before starting `pgcopydb clone --follow`.
 
 **Exit code:** 0 if no FAILs, 1 if any FAILs.
 
-**Read-only** — makes no modifications to either database.
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications to either database.
 
 ---
 
@@ -254,6 +256,8 @@ Displays a full migration progress dashboard: phase completion status, table/ind
 
 **Requires:** `PGCOPYDB_TARGET_PGURI` (for active operations query). Reads from the most recent `~/migration_*` directory.
 
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
+
 ---
 
 #### `check-cdc-status.sh`
@@ -276,6 +280,8 @@ Displays CDC-specific replication progress: apply and streaming LSN positions, b
 **Key indicator:** "CDC IS CAUGHT UP" (gap < 100 MB) means you can proceed with cutover.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
+
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
 
 ---
 
