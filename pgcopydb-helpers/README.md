@@ -245,7 +245,7 @@ If the initial COPY completed successfully but CDC was interrupted, you can resu
 MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                    # or specify explicitly
 ```
 
-This runs `pgcopydb follow` directly (not `clone --follow`), skipping schema dump/restore, COPY, and index creation entirely. Use this when you know the data copy is complete and only CDC streaming needs to restart. Logs are written to `resume-cdc-TIMESTAMP.log` in the migration directory.
+This runs `pgcopydb follow` directly (not `clone --follow`), skipping schema dump/restore, COPY, and index creation entirely. Use this when you know the data copy is complete and only CDC streaming needs to restart. Output is written to `migration.log` in the migration directory.
 
 To start completely over, wipe the target and clean up replication:
 
@@ -374,8 +374,6 @@ Every completed migration ends with a summary table showing wall clock and cumul
 - `grep -i split migration.log` — table partitioning decisions
 - `grep s_depend migration.log` — extension filtering verification
 - Check the last line for `Exit code: 0` (success) or non-zero (failure)
-
-If `resume-migration.sh` was used, check `resume-*.log` files in the migration directory as well.
 
 ### SQLite Catalogs
 
