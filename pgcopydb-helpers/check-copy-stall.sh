@@ -30,7 +30,10 @@ SAMPLE_SECS=5
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-sample)    SAMPLE=false; shift ;;
-        --sample-secs)  SAMPLE_SECS="${2:-5}"; shift 2 ;;
+        --sample-secs)
+            SAMPLE_SECS="${2:-5}"
+            [ "$SAMPLE_SECS" -gt 0 ] 2>/dev/null || { echo "--sample-secs must be a positive integer" >&2; exit 1; }
+            shift 2 ;;
         -h|--help)
             sed -n '2,/^set -eo/p' "$0" | sed 's/^# \{0,1\}//; /^set -eo/d'
             exit 0 ;;
@@ -234,7 +237,7 @@ if [ "$SAMPLE" = true ]; then
     S1=$(run_scalar "SELECT pg_current_wal_lsn() || '|' || pg_database_size(current_database())")
     L0="${S0%%|*}"; B0="${S0##*|}"
     L1="${S1%%|*}"; B1="${S1##*|}"
-    if [ -n "$L0" ] && [ -n "$L1" ]; then
+    if [ -n "$L0" ] && [ -n "$L1" ] && [ -n "$B0" ] && [ -n "$B1" ]; then
         run_table "
             SELECT pg_size_pretty(pg_wal_lsn_diff('$L1','$L0'))                       AS wal_written,
                    pg_size_pretty(GREATEST($B1-$B0,0))                                 AS db_growth,
