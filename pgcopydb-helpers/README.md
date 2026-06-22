@@ -178,6 +178,14 @@ Check overall migration progress (copy, indexes, constraints, vacuum) and see ac
 ~/check-migration-status.sh
 ```
 
+If a COPY looks stalled or unusually slow during the initial copy, diagnose why on the target — blocking locks, wait events, competing vacuums, and whether data is still landing:
+
+```bash
+~/check-copy-stall.sh
+```
+
+It is read-only and reports whether anything is actually lock-blocked (usually nothing is — a COPY waiting in `ClientRead` is waiting on the source feed, not the target) and whether autovacuum is throttling throughput.
+
 Once the initial copy completes and CDC is streaming, check replication progress:
 
 ```bash
@@ -412,6 +420,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
 | `start-migration-screen.sh` | Migrate | Run the migration in a detached screen session. |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
+| `check-copy-stall.sh` | Monitor | Diagnose a stalled/slow COPY on the target (locks, waits, vacuums, throughput) |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
 | `slack-migration-alerts.sh` | Monitor | Slack alerts |
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |

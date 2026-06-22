@@ -256,6 +256,35 @@ Displays a full migration progress dashboard: phase completion status, table/ind
 
 ---
 
+#### `check-copy-stall.sh`
+
+Diagnoses a stalled or slow COPY by inspecting live session, lock, and wait state on the **target** database. Use it when `check-migration-status.sh` shows a COPY that does not seem to be progressing, to determine *why*.
+
+```bash
+~/check-copy-stall.sh
+~/check-copy-stall.sh --no-sample          # skip the throughput sample
+~/check-copy-stall.sh --sample-secs 15     # longer throughput window
+```
+
+**Sections:**
+1. **Blocking tree** — sessions blocked on a lock and the session holding it (`pg_blocking_pids`). Empty = nothing is lock-blocked.
+2. **Ungranted locks** — anything waiting to acquire a lock.
+3. **Wait-event summary** — histogram of backends by `wait_event_type`/`wait_event`, to classify the limiter (source feed vs disk IO vs WAL vs lock vs replication).
+4. **Active COPY operations** — `pg_stat_progress_copy` with wait state and age, oldest first.
+5. **Running vacuums** — `pg_stat_progress_vacuum` with phase and % scanned.
+6. **Idle-in-transaction** — parked worker connections that pin the xmin horizon.
+7. **Ingest throughput** — WAL written and DB growth sampled over a few seconds (proves data is landing even if one stream looks idle).
+
+**Interpreting it:** The most common cause of an apparent stall is *not* a lock. A COPY backend in `wait_event = ClientRead` is waiting on the source feed (pgcopydb / source / network), not on the target. Autovacuum cannot lock-block a COPY (`ShareUpdateExclusiveLock` vs `RowExclusiveLock` don't conflict) but a full-table vacuum on a table being loaded steals IO/WAL bandwidth and throttles throughput — mitigate with per-table `ALTER TABLE ... SET (autovacuum_enabled = false)` during the load, re-enabled + `ANALYZE` after. pgcopydb cycles parts through a fixed worker pool, so COPY pids appear and disappear normally; judge progress by section 7 and changing row counts, not a single per-pid snapshot.
+
+**When to use:** Whenever a migration looks stalled or unusually slow during the COPY phase. Run it a couple of times to compare.
+
+**Requires:** `PGCOPYDB_TARGET_PGURI`
+
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications to the target.
+
+---
+
 #### `check-cdc-status.sh`
 
 Displays CDC-specific replication progress: apply and streaming LSN positions, backlog gap, apply rate, ETA to catch-up, and source replication slot health.
