@@ -81,6 +81,8 @@ GAP_GB=""
 CAUGHT_UP=""
 APPLY_RATE=""
 ETA=""
+RATE_MB_HR=""
+RATE_GB_HR=""
 
 # Get first and last apply lines to compute rate
 FIRST_APPLY_LINE=$(grep "Apply reached" "$LOG" 2>/dev/null | head -1 || true)
