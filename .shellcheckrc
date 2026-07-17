@@ -1,0 +1,18 @@
+# Shared ShellCheck configuration for CI and local runs.
+# CI gates at --severity=warning; the disables below silence findings that are
+# either unfixable or benign across the whole tree. Revisit and tighten these
+# as the scripts are cleaned up — that's the intended ratchet.
+
+# SC1090: scripts source ~/.env at runtime. The path is dynamic and cannot be
+#         resolved statically, so ShellCheck can never follow it.
+disable=SC1090
+
+# SC2088: every current hit is a tilde that is correct by construction — either
+#         literal text inside a user-facing message string, or a `bash -c`
+#         payload where the tilde reaches the inner shell unquoted and expands.
+disable=SC2088
+
+# SC2034: current hits are intentional positional field-skips in `read` and
+#         query result parsing. Re-enable after tightening those reads
+#         (e.g. `read -r name _ _ value`).
+disable=SC2034
