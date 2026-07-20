@@ -71,7 +71,7 @@ Verifies that all data was copied correctly from source to target after a migrat
 
 **Interpreting row count mismatches:** `pg_class.reltuples` estimates are only refreshed by `ANALYZE`. Run `ANALYZE` on both DBs before running this script for the most accurate estimates. If target shows _more_ rows than source for some tables, the stats are stale — not a data problem.
 
-**Exit codes:** `0` = all checks passed, `1` = warnings only, `2` = one or more failures.
+**Exit codes:** `0` = all checks passed, `1` = warnings only, `2` = one or more failures, `3` = aborted because a prerequisite or query failed (verification could not complete — the cause is printed, and it is never reported as a pass).
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 

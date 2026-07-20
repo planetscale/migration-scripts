@@ -22,11 +22,30 @@
 #   --exact-count-timeout <s>     Per-table COUNT(*) timeout in seconds (default: 120)
 #   --filters <path>              Path to filters.ini (default: ~/filters.ini). Required —
 #                                 verify scopes to the same object set the migration used.
+#
+# Exit codes:
+#   0  all checks passed
+#   1  warnings only
+#   2  one or more verification failures
+#   3  aborted — a prerequisite or query failed, so verification could not be
+#      completed (never reported as a pass; the cause is printed)
 # =============================================================================
 
 set -uo pipefail
 
+# die() (below) must abort the whole script even from inside a $(...) subshell,
+# where a plain exit would only kill the subshell — so it signals TOP_PID.
+# ERRFILE captures psql stderr so query errors are reported, not discarded.
+TOP_PID=$$
+trap 'exit 3' TERM
+ERRFILE=$(mktemp "${TMPDIR:-/tmp}/verify-migration.XXXXXX")
+trap 'rm -f "$ERRFILE"' EXIT
+
 # ── Load connection strings from ~/.env ───────────────────────────────────────
+if [[ ! -f ~/.env ]]; then
+    echo "ERROR: ~/.env not found. Create it with PGCOPYDB_SOURCE_PGURI and PGCOPYDB_TARGET_PGURI." >&2
+    exit 1
+fi
 set +u
 set -a
 source ~/.env
@@ -75,17 +94,60 @@ log_fail() { echo -e "  ${RED}✘${NC}  $*"; FAIL=$((FAIL + 1)); }
 log_warn() { echo -e "  ${YELLOW}⚠${NC}  $*"; WARN=$((WARN + 1)); }
 log_info() { echo -e "  ${CYAN}ℹ${NC}  $*"; }
 
-# Run query; returns tab-separated rows, trims trailing blank lines
-# Errors go to stderr (not suppressed) so failures are visible
-q() {
-    local conn="$1" sql="$2"
-    psql "$conn" -t -A -F $'\t' -c "$sql" 2>/dev/null | grep -v '^$' || true
+# Mask user:pass in a connection string for display/error output.
+redact() { printf '%s' "$1" | sed 's/:\/\/[^:]*:[^@]*@/:\/\/***:***@/'; }
+
+# Abort the whole run loudly, even from inside $(...): signals TOP_PID so the
+# script can't continue past a fatal error on empty/partial results.
+die() {
+    {
+        echo ""
+        printf '  %b✘  FATAL:%b %s\n' "${RED}${BOLD}" "$NC" "$1"
+    } >&2
+    kill -s TERM "$TOP_PID" 2>/dev/null
+    exit 3
 }
 
-# Like q() but prints psql errors to stderr so they're visible
-q_verbose() {
-    local conn="$1" sql="$2"
-    psql "$conn" -t -A -F $'\t' -c "$sql" | grep -v '^$' || true
+# Run a catalog query, returning tab-separated rows (blank lines trimmed).
+# ON_ERROR_STOP + abort-on-failure is the core safety property: a failed query
+# can't return "" and be mistaken for an empty (matching) result — a false PASS.
+q() {
+    local conn="$1" sql="$2" out rc
+    out=$(psql "$conn" -v ON_ERROR_STOP=1 -t -A -F $'\t' -c "$sql" 2>"$ERRFILE"); rc=$?
+    if (( rc != 0 )); then
+        die "query failed on $(redact "$conn") — verification cannot continue.
+       Aborting so a failed query is never mistaken for an empty (matching) result.
+       psql error:
+$(sed 's/^/         /' "$ERRFILE")
+       query:
+$(printf '%s\n' "$sql" | sed 's/^/         /')"
+    fi
+    printf '%s\n' "$out" | grep -v '^$' || true
+}
+
+# Exact COUNT(*) for one table with a per-table timeout. Prints one token:
+# a number, "TIMEOUT" (statement_timeout — expected on huge tables), or "ERROR"
+# (any other failure; real psql message goes to stderr). Caller handles all three
+# so an unverifiable table is never silently treated as a match.
+exact_count() {
+    local conn="$1" table="$2" out rc num
+    out=$(psql "$conn" -v ON_ERROR_STOP=1 -t -A \
+        -c "SET statement_timeout='${EXACT_COUNT_TIMEOUT}s'" \
+        -c "SELECT COUNT(*) FROM ${table}" 2>"$ERRFILE"); rc=$?
+    if (( rc == 0 )); then
+        # psql prints "SET" on stdout even in -t mode; keep only the numeric line.
+        num=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' | tail -1)
+        if [[ -n "$num" ]]; then printf '%s' "$num"; return; fi
+    fi
+    if grep -qiE 'statement timeout|canceling statement due to' "$ERRFILE"; then
+        printf 'TIMEOUT'
+    else
+        {
+            echo -e "       ${RED}✘ count query failed on $(redact "$conn") for ${table}:${NC}"
+            sed 's/^/         /' "$ERRFILE"
+        } >&2
+        printf 'ERROR'
+    fi
 }
 
 # Count non-empty lines in a variable
@@ -244,8 +306,8 @@ echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}║        PostgreSQL Migration Verification Script                 ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════════════╝${NC}"
-echo -e "  Source : ${CYAN}$(echo "$SOURCE_CONN" | sed 's/:\/\/[^:]*:[^@]*@/:\/\/***:***@/')${NC}"
-echo -e "  Target : ${CYAN}$(echo "$TARGET_CONN" | sed 's/:\/\/[^:]*:[^@]*@/:\/\/***:***@/')${NC}"
+echo -e "  Source : ${CYAN}$(redact "$SOURCE_CONN")${NC}"
+echo -e "  Target : ${CYAN}$(redact "$TARGET_CONN")${NC}"
 echo -e "  Time   : $(date)"
 echo -e "  Options: row_tolerance=${ROW_TOLERANCE}%  spot_check_tables=${SPOT_CHECK_N}"
 echo -e "  Filters: ${CYAN}${FILTER_DESC}${NC}"
@@ -411,7 +473,7 @@ log_section "5/11  CONSTRAINTS  (PK / FK / UNIQUE / CHECK)"
 
 CON_QUERY="
     SELECT n.nspname || '.' || t.relname || '  con=' || c.conname
-        || '  type=' || c.contype
+        || '  type=' || c.contype::text
         || '  def=' || pg_get_constraintdef(c.oid, true)
     FROM pg_constraint c
     JOIN pg_class t     ON t.oid = c.conrelid
@@ -462,7 +524,7 @@ log_section "7/11  FUNCTIONS & PROCEDURES"
 FUNC_QUERY="
     SELECT n.nspname || '.' || p.proname
         || '(' || pg_get_function_identity_arguments(p.oid) || ')'
-        || '  kind=' || p.prokind
+        || '  kind=' || p.prokind::text
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE true $SCHEMA_SQL_FILTER
@@ -616,8 +678,21 @@ else
 
         # Only numeric and date/time types benefit from index min/max
         if [[ "$coltype" =~ ^(int2|int4|int8|float4|float8|numeric|money|bigserial|serial|smallserial|timestamp|timestamptz|date|time|timetz) ]]; then
-            SRC_MM=$(q "$SOURCE_CONN" "SELECT MIN(\"$col\")::text, MAX(\"$col\")::text FROM $table" 2>/dev/null || true)
-            TGT_MM=$(q "$TARGET_CONN" "SELECT MIN(\"$col\")::text, MAX(\"$col\")::text FROM $table" 2>/dev/null || true)
+            # Per-table query: report failure and move on (don't abort the run),
+            # but never let a failed query pass as a silent min=/max= "match".
+            MM_SQL="SELECT MIN(\"$col\")::text, MAX(\"$col\")::text FROM $table"
+            SRC_MM=$(psql "$SOURCE_CONN" -v ON_ERROR_STOP=1 -t -A -F $'\t' -c "$MM_SQL" 2>"$ERRFILE"); SRC_RC=$?
+            SRC_ERR=$(cat "$ERRFILE")
+            TGT_MM=$(psql "$TARGET_CONN" -v ON_ERROR_STOP=1 -t -A -F $'\t' -c "$MM_SQL" 2>"$ERRFILE"); TGT_RC=$?
+            TGT_ERR=$(cat "$ERRFILE")
+
+            if (( SRC_RC != 0 || TGT_RC != 0 )); then
+                log_fail "$table.$col ($coltype): spot-check query failed — cannot confirm min/max"
+                (( SRC_RC != 0 )) && printf '         source: %s\n' "$(printf '%s' "$SRC_ERR" | tr '\n' ' ')"
+                (( TGT_RC != 0 )) && printf '         target: %s\n' "$(printf '%s' "$TGT_ERR" | tr '\n' ' ')"
+                SPOT_FAIL=$((SPOT_FAIL + 1))
+                continue
+            fi
 
             SRC_MIN=$(echo "$SRC_MM" | awk -F'\t' '{print $1}')
             SRC_MAX=$(echo "$SRC_MM" | awk -F'\t' '{print $2}')
@@ -678,7 +753,7 @@ else
     if [[ -z "$SAMPLE_TABLES" ]]; then
         log_info "No tables found in the 1 byte – ${EXACT_COUNT_MAX_GB} GB range — skipping"
     else
-        EXACT_PASS=0; EXACT_FAIL=0; EXACT_TIMEOUT=0
+        EXACT_PASS=0; EXACT_FAIL=0; EXACT_TIMEOUT=0; EXACT_ERROR=0
 
         printf "\n       %-52s  %10s  %14s  %14s  %s\n" "TABLE" "SIZE" "SOURCE_COUNT" "TARGET_COUNT" "STATUS"
         printf "       %s\n" "$(printf '─%.0s' {1..110})"
@@ -686,23 +761,18 @@ else
         while IFS=$'\t' read -r table size_bytes size_h; do
             [[ -z "$table" ]] && continue
 
-            # Run COUNT(*) with a hard per-table timeout on each side.
-            # grep filters to only the numeric line — psql emits "SET" on stdout
-            # for SET commands even in tuples-only (-t) mode, which would corrupt
-            # the variable and cause printf %d to print 0 with "invalid number".
-            SRC_CNT=$(psql "$SOURCE_CONN" -t -A \
-                -c "SET statement_timeout='${EXACT_COUNT_TIMEOUT}s'" \
-                -c "SELECT COUNT(*) FROM ${table}" 2>/dev/null \
-                | grep -E '^[0-9]+$' | tail -1 || true)
-            SRC_CNT="${SRC_CNT:-TIMEOUT}"
+            # exact_count() returns a number, "TIMEOUT", or "ERROR" — a failed
+            # count is surfaced, never read as 0 or mislabelled as a timeout.
+            SRC_CNT=$(exact_count "$SOURCE_CONN" "$table")
+            TGT_CNT=$(exact_count "$TARGET_CONN" "$table")
 
-            TGT_CNT=$(psql "$TARGET_CONN" -t -A \
-                -c "SET statement_timeout='${EXACT_COUNT_TIMEOUT}s'" \
-                -c "SELECT COUNT(*) FROM ${table}" 2>/dev/null \
-                | grep -E '^[0-9]+$' | tail -1 || true)
-            TGT_CNT="${TGT_CNT:-TIMEOUT}"
+            if [[ "$SRC_CNT" == "ERROR" || "$TGT_CNT" == "ERROR" ]]; then
+                printf "  ${RED}✘${NC}    %-52s  %10s  %14s  %14s  ERROR (count failed — see above)\n" \
+                    "$table" "$size_h" "$SRC_CNT" "$TGT_CNT"
+                FAIL=$((FAIL + 1))
+                EXACT_ERROR=$((EXACT_ERROR + 1))
 
-            if [[ "$SRC_CNT" == "TIMEOUT" || "$TGT_CNT" == "TIMEOUT" ]]; then
+            elif [[ "$SRC_CNT" == "TIMEOUT" || "$TGT_CNT" == "TIMEOUT" ]]; then
                 printf "  ${YELLOW}⚠${NC}    %-52s  %10s  %14s  %14s  TIMED OUT (>${EXACT_COUNT_TIMEOUT}s)\n" \
                     "$table" "$size_h" "$SRC_CNT" "$TGT_CNT"
                 WARN=$((WARN + 1))
@@ -726,8 +796,9 @@ else
         done <<< "$SAMPLE_TABLES"
 
         echo ""
-        if [[ $EXACT_FAIL -gt 0 ]]; then
-            log_fail "EXACT COUNT: $EXACT_FAIL table(s) have missing rows — data loss confirmed, re-migrate those tables"
+        if [[ $EXACT_FAIL -gt 0 || $EXACT_ERROR -gt 0 ]]; then
+            [[ $EXACT_FAIL  -gt 0 ]] && log_fail "EXACT COUNT: $EXACT_FAIL table(s) have missing rows — data loss confirmed, re-migrate those tables"
+            [[ $EXACT_ERROR -gt 0 ]] && log_fail "EXACT COUNT: $EXACT_ERROR table(s) could not be counted (query errored above) — coverage incomplete, investigate before trusting this run"
         elif [[ $EXACT_TIMEOUT -gt 0 ]]; then
             log_warn "EXACT COUNT: $EXACT_PASS matched, $EXACT_TIMEOUT timed out — increase --exact-count-timeout or --exact-count-max-gb"
         else
