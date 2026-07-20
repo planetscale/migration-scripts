@@ -277,7 +277,7 @@ trigger_to_skip
 
 **Important:** No comments are allowed inside sections — pgcopydb parses `#` lines as object names. Place all comments before the first section.
 
-**Shared parser:** `preflight-check.sh` and `verify-migration.sh` both interpret `~/filters.ini` through `filters-lib.sh`, a sourced helper library (not a standalone script). Keeping the parsing and scope logic in one place ensures both scripts honor the filter identically — preflight scopes its permission checks to what will be migrated, and verify scopes its comparison to what was migrated.
+
 
 ### Common Exclusions by Source
 
@@ -413,7 +413,6 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots, extension compatibility) |
 | `fix-replica-identity.sh` | Prepare | Set REPLICA IDENTITY FULL on tables without primary keys |
 | `filters.ini` | Prepare | pgcopydb filter configuration |
-| `filters-lib.sh` | Prepare | Shared `filters.ini` parser sourced by `preflight-check.sh` and `verify-migration.sh` (not run directly) |
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
 | `start-migration-screen.sh` | Migrate | Run the migration in a detached screen session. |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
