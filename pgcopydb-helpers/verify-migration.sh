@@ -82,12 +82,6 @@ q() {
     psql "$conn" -t -A -F $'\t' -c "$sql" 2>/dev/null | grep -v '^$' || true
 }
 
-# Like q() but prints psql errors to stderr so they're visible
-q_verbose() {
-    local conn="$1" sql="$2"
-    psql "$conn" -t -A -F $'\t' -c "$sql" | grep -v '^$' || true
-}
-
 # Count non-empty lines in a variable
 # grep -c exits 1 on zero matches (but still prints "0"), so || true is enough
 line_count() { printf '%s' "${1:-}" | grep -c . || true; }
