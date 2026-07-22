@@ -277,6 +277,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# These go into SQL (LIMIT/BETWEEN/statement_timeout) and shell arithmetic;
+# reject non-integers up front so a typo fails here, not silently as 0 later.
+require_int() { [[ "$2" =~ ^[0-9]+$ ]] || { echo "ERROR: $1 requires a non-negative integer, got: '$2'" >&2; exit 1; }; }
+require_int --row-count-tolerance "$ROW_TOLERANCE"
+require_int --spot-check-tables   "$SPOT_CHECK_N"
+require_int --exact-count-tables  "$EXACT_COUNT_N"
+require_int --exact-count-max-gb  "$EXACT_COUNT_MAX_GB"
+require_int --exact-count-timeout "$EXACT_COUNT_TIMEOUT"
+
 # Always-required system-schema exclusion (independent of filters.ini)
 SCHEMA_SQL_FILTER="AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')"
 SCHEMA_SQL_FILTER_PLAIN="AND table_schema NOT IN ('pg_catalog','information_schema','pg_toast')"
@@ -653,7 +662,9 @@ else
         SELECT n.nspname || '.' || t.relname,
                a.attname,
                tp.typname,
-               sz.reltuples::bigint
+               sz.reltuples::bigint,
+               quote_ident(n.nspname) || '.' || quote_ident(t.relname),
+               quote_ident(a.attname)
         FROM pg_constraint c
         JOIN pg_class t     ON t.oid = c.conrelid
         JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -673,14 +684,15 @@ else
 
     SPOT_FAIL=0; SPOT_SKIP=0; SPOT_PASS=0
 
-    while IFS=$'\t' read -r table col coltype est_rows; do
+    while IFS=$'\t' read -r table col coltype est_rows qtable qcol; do
         [[ -z "$table" ]] && continue
 
         # Only numeric and date/time types benefit from index min/max
         if [[ "$coltype" =~ ^(int2|int4|int8|float4|float8|numeric|money|bigserial|serial|smallserial|timestamp|timestamptz|date|time|timetz) ]]; then
             # Per-table query: report failure and move on (don't abort the run),
             # but never let a failed query pass as a silent min=/max= "match".
-            MM_SQL="SELECT MIN(\"$col\")::text, MAX(\"$col\")::text FROM $table"
+            # qtable/qcol are quote_ident()'d so mixed-case/quoted names work.
+            MM_SQL="SELECT MIN(${qcol})::text, MAX(${qcol})::text FROM ${qtable}"
             SRC_MM=$(psql "$SOURCE_CONN" -v ON_ERROR_STOP=1 -t -A -F $'\t' -c "$MM_SQL" 2>"$ERRFILE"); SRC_RC=$?
             SRC_ERR=$(cat "$ERRFILE")
             TGT_MM=$(psql "$TARGET_CONN" -v ON_ERROR_STOP=1 -t -A -F $'\t' -c "$MM_SQL" 2>"$ERRFILE"); TGT_RC=$?
@@ -738,7 +750,8 @@ else
     EXACT_SAMPLE_QUERY="
         SELECT n.nspname || '.' || c.relname,
                pg_total_relation_size(c.oid),
-               pg_size_pretty(pg_total_relation_size(c.oid))
+               pg_size_pretty(pg_total_relation_size(c.oid)),
+               quote_ident(n.nspname) || '.' || quote_ident(c.relname)
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE c.relkind = 'r'
@@ -758,13 +771,14 @@ else
         printf "\n       %-52s  %10s  %14s  %14s  %s\n" "TABLE" "SIZE" "SOURCE_COUNT" "TARGET_COUNT" "STATUS"
         printf "       %s\n" "$(printf '─%.0s' {1..110})"
 
-        while IFS=$'\t' read -r table size_bytes size_h; do
+        while IFS=$'\t' read -r table size_bytes size_h qtable; do
             [[ -z "$table" ]] && continue
 
             # exact_count() returns a number, "TIMEOUT", or "ERROR" — a failed
             # count is surfaced, never read as 0 or mislabelled as a timeout.
-            SRC_CNT=$(exact_count "$SOURCE_CONN" "$table")
-            TGT_CNT=$(exact_count "$TARGET_CONN" "$table")
+            # qtable is quote_ident()'d so mixed-case/quoted names work.
+            SRC_CNT=$(exact_count "$SOURCE_CONN" "$qtable")
+            TGT_CNT=$(exact_count "$TARGET_CONN" "$qtable")
 
             if [[ "$SRC_CNT" == "ERROR" || "$TGT_CNT" == "ERROR" ]]; then
                 printf "  ${RED}✘${NC}    %-52s  %10s  %14s  %14s  ERROR (count failed — see above)\n" \
