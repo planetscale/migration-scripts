@@ -237,6 +237,15 @@ This drops the replication slot on the source, the replication origin on the tar
 
 ## Recovery
 
+To halt a running migration immediately — for example when the source database is overloaded during the initial copy — use the emergency stop:
+
+```bash
+~/emergency-stop.sh                                                          # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/emergency-stop.sh                # or specify explicitly
+```
+
+This terminates `pgcopydb` and all of its workers at once (SIGTERM, escalating to SIGKILL on its own if needed) after prompting for confirmation and printing the consequences. It is **stop-only**: it does not drop the replication slot or touch the target, so the migration stays resumable with `resume-migration.sh` / `resume-cdc.sh` below.
+
 If pgcopydb crashes, the instance reboots, or the migration is interrupted:
 
 ```bash
@@ -423,6 +432,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `check-copy-stall.sh` | Monitor | Diagnose a stalled/slow COPY on the target (locks, waits, vacuums, throughput) |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
 | `slack-migration-alerts.sh` | Monitor | Slack alerts |
+| `emergency-stop.sh` | Recovery | Immediately stop a running migration and all subprocesses |
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
 | `resume-cdc.sh` | Recovery | Resume only the CDC phase (skips clone) |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
