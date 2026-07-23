@@ -52,6 +52,14 @@ source ~/.env
 set +a
 set -u
 
+# ── Read-only safety belt ─────────────────────────────────────────────────────
+# verify only reads. default_transaction_read_only blocks any accidental write.
+# No global statement_timeout here: exact-count COUNT(*) queries set their own
+# (--exact-count-timeout), and a short lock_timeout could turn a transient lock on
+# a busy source into a false verification failure. Exported so every psql call
+# inherits it.
+export PGOPTIONS='-c default_transaction_read_only=on'
+
 if [[ -z "${PGCOPYDB_SOURCE_PGURI:-}" || -z "${PGCOPYDB_TARGET_PGURI:-}" ]]; then
     echo "ERROR: PGCOPYDB_SOURCE_PGURI and PGCOPYDB_TARGET_PGURI must be set in ~/.env"
     exit 1
