@@ -34,6 +34,8 @@ Compares performance-relevant PostgreSQL parameters between source and target da
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
+
 ---
 
 #### `verify-migration.sh`
@@ -75,7 +77,7 @@ Verifies that all data was copied correctly from source to target after a migrat
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
-**Read-only** — makes no modifications to either database.
+**Read-only** — connects with `default_transaction_read_only=on`; makes no modifications to either database. No global statement timeout: exact-count `COUNT(*)` queries set their own via `--exact-count-timeout`.
 
 ---
 
@@ -98,7 +100,7 @@ Validates all migration prerequisites before starting `pgcopydb clone --follow`.
 
 **Exit code:** 0 if no FAILs, 1 if any FAILs.
 
-**Read-only** — makes no modifications to either database.
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications to either database.
 
 ---
 
@@ -207,6 +209,23 @@ Wrapper that runs `run-migration.sh` inside a detached `screen` session named "m
 - `Ctrl-A D` — detach from screen (migration keeps running)
 - `~/check-migration-status.sh` — check progress without attaching
 
+#### `emergency-stop.sh`
+
+Immediately terminates a running migration and all of its subprocesses (clone/COPY/index/follow workers). Finds the supervisor PID from `$MIGRATION_DIR/pgcopydb.pid` (with a `pgrep` fallback), prints what will be stopped plus the consequences, and — after a single `[y/N]` confirmation — sends `SIGTERM` to the whole process group, then escalates automatically to repeated `SIGKILL` (process group plus each surviving PID). If anything is still alive after that, it warns loudly with the leftover PIDs and exits non-zero rather than failing silently. Also quits the detached `migration` screen session. Reads the SQLite catalog directly to report copy progress and recommend the right resume path.
+
+```bash
+~/emergency-stop.sh
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/emergency-stop.sh
+```
+
+**When to use:** An emergency — e.g. the source database is overloaded during the initial copy, or the migration must be halted at once.
+
+**Stop-only and resumable:** it does NOT drop the replication slot, snapshot, or target data. The migration dir, SQLite catalog, and source slot are preserved, so afterwards you can resume with `resume-migration.sh` (or `resume-cdc.sh` if the initial COPY had finished). To instead abandon and start over, run `drop-replication-slots.sh` → `target-clean.sh` → `start-migration-screen.sh`. Leaving the slot in place keeps WAL accumulating on the source until you resume or drop it.
+
+**Requires:** a running migration. **No `~/.env` needed** — it never reads DB credentials (and never prints process command lines, which would leak PGURI passwords).
+
+**Exit code:** `0` when processes were stopped or nothing was running; `1` if pgcopydb processes survived (it lists the leftover PIDs).
+
 ---
 
 ### Monitoring
@@ -253,6 +272,8 @@ Displays a full migration progress dashboard: phase completion status, table/ind
 - Active queries on the target (COPY, CREATE INDEX, VACUUM, etc.)
 
 **Requires:** `PGCOPYDB_TARGET_PGURI` (for active operations query). Reads from the most recent `~/migration_*` directory.
+
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
 
 ---
 
@@ -305,6 +326,8 @@ Displays CDC-specific replication progress: apply and streaming LSN positions, b
 **Key indicator:** "CDC IS CAUGHT UP" (gap < 100 MB) means you can proceed with cutover.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
+
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
 
 ---
 
