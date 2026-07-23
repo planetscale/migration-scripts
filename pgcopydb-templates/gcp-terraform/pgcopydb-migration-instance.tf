@@ -261,7 +261,7 @@ resource "google_compute_instance" "pgcopydb_instance" {
 
   metadata = var.ssh_public_key != null ? {
     ssh-keys = "ubuntu:${var.ssh_public_key}"
-  } : {
+    } : {
     enable-oslogin = "TRUE"
   }
 
