@@ -75,12 +75,21 @@ tgt_query() {
 }
 
 # ── Filter scope helpers ─────────────────────────────────────────────
+# Interprets ~/filters.ini so catalog queries can be scoped to exactly the object
+# subset the migration copies. 
 
-# Parse scope-relevant sections from filters.ini into global arrays
+# Scope-relevant filter state. Initialised here so it's safe under `set -u`
+# before parse_filters_ini runs (or when no filters.ini is loaded).
+FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
+FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
+FILTER_EXCLUDE_EXTENSIONS=()
+
+# Parse scope-relevant sections from filters.ini into the global arrays above.
 parse_filters_ini() {
     local ini_file="$1"
     FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
     FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
+    FILTER_EXCLUDE_EXTENSIONS=()
     local section="" line
     while IFS= read -r line; do
         line="${line#"${line%%[![:space:]]*}"}"   # ltrim
@@ -92,13 +101,14 @@ parse_filters_ini() {
             exclude-table)       FILTER_EXCLUDE_TABLES+=("$line")       ;;
             include-only-table)  FILTER_INCLUDE_ONLY_TABLES+=("$line")  ;;
             include-only-schema) FILTER_INCLUDE_ONLY_SCHEMAS+=("$line") ;;
+            exclude-extension)   FILTER_EXCLUDE_EXTENSIONS+=("$line")   ;;
         esac
     done < "$ini_file"
 }
 
 # Returns the effective filter mode: include-table | include-schema | exclude-schema | all
 filter_scope_mode() {
-    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ] && { echo "include-table";  return; }
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ]  && { echo "include-table";  return; }
     [ ${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} -gt 0 ] && { echo "include-schema"; return; }
     [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ]      && { echo "exclude-schema"; return; }
     echo "all"
@@ -124,46 +134,60 @@ _it_schema_sql_list() {
     echo "$result"
 }
 
-# Returns "AND n.nspname IN/NOT IN (...)" SQL fragment, or "" for all mode
-build_schema_where() {
-    local mode list
+# schema_clause <schema-column-expr> — "AND <col> IN/NOT IN (...)" or "" for all mode.
+# Applied to every object type so excluded/included schemas scope the whole comparison.
+schema_clause() {
+    local col="$1" mode list
     mode=$(filter_scope_mode)
     case "$mode" in
-        include-table)  list=$(_it_schema_sql_list "${FILTER_INCLUDE_ONLY_TABLES[@]}") ;;
-        include-schema) list=$(_sql_list "${FILTER_INCLUDE_ONLY_SCHEMAS[@]}") ;;
-        exclude-schema) list=$(_sql_list "${FILTER_EXCLUDE_SCHEMAS[@]}") ;;
-        all)            echo ""; return ;;
+        include-table)  list=$(_it_schema_sql_list "${FILTER_INCLUDE_ONLY_TABLES[@]}"); echo "AND ${col} IN (${list})" ;;
+        include-schema) list=$(_sql_list "${FILTER_INCLUDE_ONLY_SCHEMAS[@]}");          echo "AND ${col} IN (${list})" ;;
+        exclude-schema) list=$(_sql_list "${FILTER_EXCLUDE_SCHEMAS[@]}");               echo "AND ${col} NOT IN (${list})" ;;
+        all)            echo "" ;;
     esac
-    local op="IN"; [ "$mode" = "exclude-schema" ] && op="NOT IN"
-    echo "AND n.nspname ${op} (${list})"
 }
 
-# Returns SQL fragment to append to table-count sub-queries (starts with " AND"), or ""
-build_table_filter() {
-    local mode
+# table_clause <schema-col> <rel-col> — restricts table-keyed checks to the
+# in-scope table set. " AND (<schema>.<rel>) IN/NOT IN (...)" or "".
+table_clause() {
+    local scol="$1" rcol="$2" mode
     mode=$(filter_scope_mode)
     if [ "$mode" = "include-table" ]; then
-        echo " AND (n.nspname || '.' || c.relname) IN ($(_sql_list "${FILTER_INCLUDE_ONLY_TABLES[@]}"))"
+        echo " AND (${scol} || '.' || ${rcol}) IN ($(_sql_list "${FILTER_INCLUDE_ONLY_TABLES[@]}"))"
     elif [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ]; then
-        echo " AND (n.nspname || '.' || c.relname) NOT IN ($(_sql_list "${FILTER_EXCLUDE_TABLES[@]}"))"
+        echo " AND (${scol} || '.' || ${rcol}) NOT IN ($(_sql_list "${FILTER_EXCLUDE_TABLES[@]}"))"
     else
         echo ""
     fi
 }
 
+# extension_clause <extname-col> — excludes [exclude-extension] entries, or "".
+extension_clause() {
+    local col="$1"
+    [ ${#FILTER_EXCLUDE_EXTENSIONS[@]} -eq 0 ] && { echo ""; return; }
+    echo "AND ${col} NOT IN ($(_sql_list "${FILTER_EXCLUDE_EXTENSIONS[@]}"))"
+}
+
+# Human-readable one-line summary of the active scope
+filter_scope_describe() {
+    case "$(filter_scope_mode)" in
+        include-table)  echo "include-only-table (${#FILTER_INCLUDE_ONLY_TABLES[@]} table(s))" ;;
+        include-schema) echo "include-only-schema (${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} schema(s))" ;;
+        exclude-schema) echo "exclude-schema (${#FILTER_EXCLUDE_SCHEMAS[@]} schema(s))$([ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ] && echo " + exclude-table (${#FILTER_EXCLUDE_TABLES[@]})")" ;;
+        all)            [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ] && { echo "exclude-table (${#FILTER_EXCLUDE_TABLES[@]} table(s))"; return; }; echo "none" ;;
+    esac
+}
+
 # Lists disallowed section combinations present in filters.ini (pgcopydb rejects these), or ""
 filter_conflicts() {
     local c=()
-    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-table + exclude-schema")
-    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ]  && c+=("include-only-table + exclude-table")
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ]  && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-table + exclude-schema")
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ]  && [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ]  && c+=("include-only-table + exclude-table")
     [ ${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-schema + exclude-schema")
     local IFS="; "; echo "${c[*]:-}"
 }
 
 # ── Pre-parse filters.ini (scope needed for source permission checks) ─
-FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
-FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
-
 [ -f ~/filters.ini ] && parse_filters_ini ~/filters.ini
 
 # ══════════════════════════════════════════════════════════════════
@@ -290,8 +314,8 @@ else
 fi
 
 # Per-schema: USAGE + SELECT on tables/mat views/sequences, scoped to what filters.ini will migrate
-_schema_where=$(build_schema_where)
-_table_filter=$(build_table_filter)
+_schema_where=$(schema_clause "n.nspname")
+_table_filter=$(table_clause "n.nspname" "c.relname")
 [ "$(filter_scope_mode)" = "include-table" ] && _check_seqs=false || _check_seqs=true
 
 if [ "$_check_seqs" = "true" ]; then
@@ -366,10 +390,11 @@ if [ -n "$TGT_VER" ]; then
         pass "Existing pgcopydb schema" "none"
     fi
 
-    # 14. Extension compatibility
+    # 14. Extension compatibility — exclusions come from the shared filters.ini
+    # parser ([exclude-extension] → FILTER_EXCLUDE_EXTENSIONS), as newline list.
     FILTER_EXCLUDED_EXTS=""
-    if [ -f ~/filters.ini ]; then
-        FILTER_EXCLUDED_EXTS=$(awk '/^\[exclude-extension\]/{found=1; next} /^\[/{found=0} found && /[^[:space:]]/{gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}' ~/filters.ini)
+    if [ ${#FILTER_EXCLUDE_EXTENSIONS[@]} -gt 0 ]; then
+        FILTER_EXCLUDED_EXTS=$(printf '%s\n' "${FILTER_EXCLUDE_EXTENSIONS[@]}")
     fi
 
     SRC_EXTS=$(src_query "SELECT extname FROM pg_extension ORDER BY extname;")

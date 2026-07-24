@@ -166,12 +166,16 @@ line_count() { printf '%s' "${1:-}" | grep -c . || true; }
 abs() { local v=$1; echo "${v#-}"; }
 
 # ── filters.ini scope helpers ─────────────────────────────────────────────────
-# The migration only copies the subset of objects allowed by ~/filters.ini.
-# Without this awareness, intentionally-excluded objects (e.g. Supabase's auth,
-# storage, realtime schemas) show up as "missing in target" — false-positive
-# noise. These helpers mirror preflight-check.sh's interpretation of filters.ini.
+# Interprets ~/filters.ini so catalog queries can be scoped to exactly the object
+# subset the migration copies. 
 
-# Parse scope-relevant sections from filters.ini into global arrays
+# Scope-relevant filter state. Initialised here so it's safe under `set -u`
+# before parse_filters_ini runs (or when no filters.ini is loaded).
+FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
+FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
+FILTER_EXCLUDE_EXTENSIONS=()
+
+# Parse scope-relevant sections from filters.ini into the global arrays above.
 parse_filters_ini() {
     local ini_file="$1"
     FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
@@ -265,10 +269,14 @@ filter_scope_describe() {
     esac
 }
 
-# Arrays must exist before any helper references them (set -u)
-FILTER_EXCLUDE_SCHEMAS=(); FILTER_EXCLUDE_TABLES=()
-FILTER_INCLUDE_ONLY_TABLES=(); FILTER_INCLUDE_ONLY_SCHEMAS=()
-FILTER_EXCLUDE_EXTENSIONS=()
+# Lists disallowed section combinations present in filters.ini (pgcopydb rejects these), or ""
+filter_conflicts() {
+    local c=()
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ]  && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-table + exclude-schema")
+    [ ${#FILTER_INCLUDE_ONLY_TABLES[@]} -gt 0 ]  && [ ${#FILTER_EXCLUDE_TABLES[@]} -gt 0 ]  && c+=("include-only-table + exclude-table")
+    [ ${#FILTER_INCLUDE_ONLY_SCHEMAS[@]} -gt 0 ] && [ ${#FILTER_EXCLUDE_SCHEMAS[@]} -gt 0 ] && c+=("include-only-schema + exclude-schema")
+    local IFS="; "; echo "${c[*]:-}"
+}
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do

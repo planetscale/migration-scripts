@@ -150,6 +150,8 @@ trigger_to_skip
 - **Supabase:** `auth`, `storage`, `supabase_functions`, `cron`, `realtime`, `supabase_migrations`, `net`, `_supabase`, `graphql`, `graphql_public` schemas; `pg_net`, `pg_graphql`, `pg_repack`, `http`, `pg_stat_monitor`, `pgstattuple` extensions; `supabase_functions.hooks` event trigger
 - **AlloyDB:** `ai`, `google_ml`, `helpobj`, `perfsnap`, `pgsnap` schemas; `g_stats`, `google_columnar_engine`, `google_db_advisor`, `google_ml_integration` extensions
 
+
+
 ---
 
 #### Source-Specific: Supabase RLS

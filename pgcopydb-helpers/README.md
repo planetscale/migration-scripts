@@ -294,6 +294,8 @@ trigger_to_skip
 
 **Important:** No comments are allowed inside sections — pgcopydb parses `#` lines as object names. Place all comments before the first section.
 
+
+
 ### Common Exclusions by Source
 
 **Amazon RDS:**
