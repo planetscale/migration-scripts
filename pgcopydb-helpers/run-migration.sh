@@ -44,8 +44,14 @@ INDEX_JOBS=12
 
 mkdir -p "$MIGRATION_DIR"
 cd "$MIGRATION_DIR"
-ulimit -c unlimited
-echo "$MIGRATION_DIR/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
+# Core dumps help debug rare native crashes; not required for a successful migrate.
+# SSM sessions often cannot raise the core ulimit — do not abort if this fails.
+if ! ulimit -c unlimited 2>/dev/null; then
+    echo "WARN: could not raise core ulimit (common under SSM); continuing without core dumps" >&2
+fi
+if ! echo "$MIGRATION_DIR/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern; then
+    echo "WARN: could not set kernel.core_pattern; continuing without core dumps" >&2
+fi
 
 {
     echo ""
