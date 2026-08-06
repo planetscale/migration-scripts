@@ -27,6 +27,13 @@ source ~/.env
 set +a
 set -u
 
+# --- Read-only safety belt ---
+# This script only reads. default_transaction_read_only blocks any accidental
+# write, and the statement/lock timeouts keep a check from hanging on a busy
+# database — important when querying the live source. Exported so every psql call
+# inherits it.
+export PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=30000 -c lock_timeout=5000'
+
 MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 if [ -z "$MIGRATION_DIR" ]; then
     echo -e "${RED}✗ No migration directory found${NC}"

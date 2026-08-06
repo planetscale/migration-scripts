@@ -34,6 +34,8 @@ Compares performance-relevant PostgreSQL parameters between source and target da
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
+
 ---
 
 #### `verify-migration.sh`
@@ -71,11 +73,11 @@ Verifies that all data was copied correctly from source to target after a migrat
 
 **Interpreting row count mismatches:** `pg_class.reltuples` estimates are only refreshed by `ANALYZE`. Run `ANALYZE` on both DBs before running this script for the most accurate estimates. If target shows _more_ rows than source for some tables, the stats are stale — not a data problem.
 
-**Exit codes:** `0` = all checks passed, `1` = warnings only, `2` = one or more failures.
+**Exit codes:** `0` = all checks passed, `1` = warnings only, `2` = one or more failures, `3` = aborted because a prerequisite or query failed (verification could not complete — the cause is printed, and it is never reported as a pass).
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
-**Read-only** — makes no modifications to either database.
+**Read-only** — connects with `default_transaction_read_only=on`; makes no modifications to either database. No global statement timeout: exact-count `COUNT(*)` queries set their own via `--exact-count-timeout`.
 
 ---
 
@@ -98,7 +100,7 @@ Validates all migration prerequisites before starting `pgcopydb clone --follow`.
 
 **Exit code:** 0 if no FAILs, 1 if any FAILs.
 
-**Read-only** — makes no modifications to either database.
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications to either database.
 
 ---
 
@@ -215,6 +217,23 @@ Wrapper that runs `run-migration.sh` inside a detached `screen` session named "m
 - `Ctrl-A D` — detach from screen (migration keeps running)
 - `~/check-migration-status.sh` — check progress without attaching
 
+#### `emergency-stop.sh`
+
+Immediately terminates a running migration and all of its subprocesses (clone/COPY/index/follow workers). Finds the supervisor PID from `$MIGRATION_DIR/pgcopydb.pid` (with a `pgrep` fallback), prints what will be stopped plus the consequences, and — after a single `[y/N]` confirmation — sends `SIGTERM` to the whole process group, then escalates automatically to repeated `SIGKILL` (process group plus each surviving PID). If anything is still alive after that, it warns loudly with the leftover PIDs and exits non-zero rather than failing silently. Also quits the detached `migration` screen session. Reads the SQLite catalog directly to report copy progress and recommend the right resume path.
+
+```bash
+~/emergency-stop.sh
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/emergency-stop.sh
+```
+
+**When to use:** An emergency — e.g. the source database is overloaded during the initial copy, or the migration must be halted at once.
+
+**Stop-only and resumable:** it does NOT drop the replication slot, snapshot, or target data. The migration dir, SQLite catalog, and source slot are preserved, so afterwards you can resume with `resume-migration.sh` (or `resume-cdc.sh` if the initial COPY had finished). To instead abandon and start over, run `drop-replication-slots.sh` → `target-clean.sh` → `start-migration-screen.sh`. Leaving the slot in place keeps WAL accumulating on the source until you resume or drop it.
+
+**Requires:** a running migration. **No `~/.env` needed** — it never reads DB credentials (and never prints process command lines, which would leak PGURI passwords).
+
+**Exit code:** `0` when processes were stopped or nothing was running; `1` if pgcopydb processes survived (it lists the leftover PIDs).
+
 ---
 
 ### Monitoring
@@ -262,6 +281,37 @@ Displays a full migration progress dashboard: phase completion status, table/ind
 
 **Requires:** `PGCOPYDB_TARGET_PGURI` (for active operations query). Reads from the most recent `~/migration_*` directory.
 
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
+
+---
+
+#### `check-copy-stall.sh`
+
+Diagnoses a stalled or slow COPY by inspecting live session, lock, and wait state on the **target** database. Use it when `check-migration-status.sh` shows a COPY that does not seem to be progressing, to determine *why*.
+
+```bash
+~/check-copy-stall.sh
+~/check-copy-stall.sh --no-sample          # skip the throughput sample
+~/check-copy-stall.sh --sample-secs 15     # longer throughput window
+```
+
+**Sections:**
+1. **Blocking tree** — sessions blocked on a lock and the session holding it (`pg_blocking_pids`). Empty = nothing is lock-blocked.
+2. **Ungranted locks** — anything waiting to acquire a lock.
+3. **Wait-event summary** — histogram of backends by `wait_event_type`/`wait_event`, to classify the limiter (source feed vs disk IO vs WAL vs lock vs replication).
+4. **Active COPY operations** — `pg_stat_progress_copy` with wait state and age, oldest first.
+5. **Running vacuums** — `pg_stat_progress_vacuum` with phase and % scanned.
+6. **Idle-in-transaction** — parked worker connections that pin the xmin horizon.
+7. **Ingest throughput** — WAL written and DB growth sampled over a few seconds (proves data is landing even if one stream looks idle).
+
+**Interpreting it:** The most common cause of an apparent stall is *not* a lock. A COPY backend in `wait_event = ClientRead` is waiting on the source feed (pgcopydb / source / network), not on the target. Autovacuum cannot lock-block a COPY (`ShareUpdateExclusiveLock` vs `RowExclusiveLock` don't conflict) but a full-table vacuum on a table being loaded steals IO/WAL bandwidth and throttles throughput — mitigate with per-table `ALTER TABLE ... SET (autovacuum_enabled = false)` during the load, re-enabled + `ANALYZE` after. pgcopydb cycles parts through a fixed worker pool, so COPY pids appear and disappear normally; judge progress by section 7 and changing row counts, not a single per-pid snapshot.
+
+**When to use:** Whenever a migration looks stalled or unusually slow during the COPY phase. Run it a couple of times to compare.
+
+**Requires:** `PGCOPYDB_TARGET_PGURI`
+
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications to the target.
+
 ---
 
 #### `check-cdc-status.sh`
@@ -284,6 +334,8 @@ Displays CDC-specific replication progress: apply and streaming LSN positions, b
 **Key indicator:** "CDC IS CAUGHT UP" (gap < 100 MB) means you can proceed with cutover.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
+
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications.
 
 ---
 
@@ -315,7 +367,7 @@ Resumes only the CDC phase of a previously interrupted migration using `pgcopydb
 MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                # specify explicitly
 ```
 
-**When to use:** After the initial COPY completed successfully but CDC was interrupted (crash, reboot, connection drop). If you are unsure whether COPY finished, use `resume-migration.sh` instead — it will resume from wherever pgcopydb left off. Logs are written to `resume-cdc-TIMESTAMP.log` in the migration directory.
+**When to use:** After the initial COPY completed successfully but CDC was interrupted (crash, reboot, connection drop). If you are unsure whether COPY finished, use `resume-migration.sh` instead — it will resume from wherever pgcopydb left off. Output is written to `migration.log` in the migration directory.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, existing migration directory with completed COPY
 
@@ -420,7 +472,6 @@ Example end-of-run summary:
 - Search for `Splitting` or `split` to see table partitioning decisions
 - Search for `s_depend` or `pg_depend` to verify extension filtering
 - Check the exit code at the end: `Exit code: 0` means success
-- If resume logs exist (`resume-*.log`), check those too — they contain output from `resume-migration.sh` runs
 
 When asking for help with a failed migration, share the full log or at minimum the last 100 lines and any ERROR lines.
 

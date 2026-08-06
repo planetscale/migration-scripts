@@ -15,6 +15,13 @@ source ~/.env
 set +a
 set -u
 
+# --- Read-only safety belt ---
+# This script only reads. default_transaction_read_only blocks any accidental
+# write, and the statement/lock timeouts keep a check from hanging on a busy
+# database — important when querying the live source. Exported so every psql call
+# inherits it.
+export PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=30000 -c lock_timeout=5000'
+
 # --- Configuration ---
 MIGRATION_DIR="${MIGRATION_DIR:-$(ls -dt ~/migration_*/ 2>/dev/null | head -1 || true)}"
 
@@ -23,9 +30,7 @@ if [ -z "$MIGRATION_DIR" ]; then
     exit 1
 fi
 
-# Find the latest resume log (or migration.log)
-RESUME_LOG=$(ls -t "$MIGRATION_DIR"/resume-*.log 2>/dev/null | head -1 || true)
-LOG="${RESUME_LOG:-$MIGRATION_DIR/migration.log}"
+LOG="$MIGRATION_DIR/migration.log"
 
 # --- 1. Process check ---
 PROCS=$(pgrep -a pgcopydb 2>/dev/null || true)
@@ -81,6 +86,8 @@ GAP_GB=""
 CAUGHT_UP=""
 APPLY_RATE=""
 ETA=""
+RATE_MB_HR=""
+RATE_GB_HR=""
 
 # Get first and last apply lines to compute rate
 FIRST_APPLY_LINE=$(grep "Apply reached" "$LOG" 2>/dev/null | head -1 || true)

@@ -178,6 +178,14 @@ Check overall migration progress (copy, indexes, constraints, vacuum) and see ac
 ~/check-migration-status.sh
 ```
 
+If a COPY looks stalled or unusually slow during the initial copy, diagnose why on the target — blocking locks, wait events, competing vacuums, and whether data is still landing:
+
+```bash
+~/check-copy-stall.sh
+```
+
+It is read-only and reports whether anything is actually lock-blocked (usually nothing is — a COPY waiting in `ClientRead` is waiting on the source feed, not the target) and whether autovacuum is throttling throughput.
+
 Once the initial copy completes and CDC is streaming, check replication progress:
 
 ```bash
@@ -229,6 +237,15 @@ This drops the replication slot on the source, the replication origin on the tar
 
 ## Recovery
 
+To halt a running migration immediately — for example when the source database is overloaded during the initial copy — use the emergency stop:
+
+```bash
+~/emergency-stop.sh                                                          # uses most recent migration dir
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/emergency-stop.sh                # or specify explicitly
+```
+
+This terminates `pgcopydb` and all of its workers at once (SIGTERM, escalating to SIGKILL on its own if needed) after prompting for confirmation and printing the consequences. It is **stop-only**: it does not drop the replication slot or touch the target, so the migration stays resumable with `resume-migration.sh` / `resume-cdc.sh` below.
+
 If pgcopydb crashes, the instance reboots, or the migration is interrupted:
 
 ```bash
@@ -245,7 +262,7 @@ If the initial COPY completed successfully but CDC was interrupted, you can resu
 MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                    # or specify explicitly
 ```
 
-This runs `pgcopydb follow` directly (not `clone --follow`), skipping schema dump/restore, COPY, and index creation entirely. Use this when you know the data copy is complete and only CDC streaming needs to restart. Logs are written to `resume-cdc-TIMESTAMP.log` in the migration directory.
+This runs `pgcopydb follow` directly (not `clone --follow`), skipping schema dump/restore, COPY, and index creation entirely. Use this when you know the data copy is complete and only CDC streaming needs to restart. Output is written to `migration.log` in the migration directory.
 
 To start completely over, wipe the target and clean up replication:
 
@@ -377,8 +394,6 @@ Every completed migration ends with a summary table showing wall clock and cumul
 - `grep s_depend migration.log` — extension filtering verification
 - Check the last line for `Exit code: 0` (success) or non-zero (failure)
 
-If `resume-migration.sh` was used, check `resume-*.log` files in the migration directory as well.
-
 ### SQLite Catalogs
 
 pgcopydb tracks all migration state in SQLite databases inside the migration directory. Several of the monitoring scripts (`check-migration-status.sh`, `check-cdc-status.sh`, `stop-cdc.sh`) read directly from these catalogs.
@@ -417,8 +432,10 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
 | `start-migration-screen.sh` | Migrate | Run the migration in a detached screen session. |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
+| `check-copy-stall.sh` | Monitor | Diagnose a stalled/slow COPY on the target (locks, waits, vacuums, throughput) |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
 | `slack-migration-alerts.sh` | Monitor | Slack alerts |
+| `emergency-stop.sh` | Recovery | Immediately stop a running migration and all subprocesses |
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
 | `resume-cdc.sh` | Recovery | Resume only the CDC phase (skips clone) |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
