@@ -38,7 +38,13 @@ set -uo pipefail
 # Sourced first: it only defines functions and initialises its arrays, so it has
 # no prerequisites, and everything below can rely on the helpers being present.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/filters-lib.sh"
+# Guarded: no `set -e` here, so an unguarded failed source would continue with
+# the helpers undefined — every clause empty, silently widening the comparison.
+source "$SCRIPT_DIR/filters-lib.sh" || {
+    echo "ERROR: cannot load $SCRIPT_DIR/filters-lib.sh" >&2
+    exit 3
+}
+
 # die() (below) must abort the whole script even from inside a $(...) subshell,
 # where a plain exit would only kill the subshell — so it signals TOP_PID.
 # ERRFILE captures psql stderr so query errors are reported, not discarded.
