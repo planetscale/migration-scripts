@@ -60,6 +60,7 @@ if [[ ! -f ~/.env ]]; then
 fi
 set +u
 set -a
+# shellcheck source=/dev/null  # user-supplied file, not in the repo
 source ~/.env
 set +a
 set -u
@@ -211,6 +212,12 @@ SCHEMA_SQL_FILTER_PLAIN="AND table_schema NOT IN ('pg_catalog','information_sche
 if [[ -f "$FILTERS_FILE" ]]; then
     parse_filters_ini "$FILTERS_FILE"
     FILTER_DESC="$FILTERS_FILE — $(filter_scope_describe)"
+    # pgcopydb in include-only-table mode copies the listed tables together with
+    # their own indexes, constraints and sequences — but not the views, routines or
+    # standalone sequences that merely share those schemas. Comparing those would
+    # report guaranteed false alarms, so checks 6/7/9 are skipped in this mode.
+    INCLUDE_TABLE_MODE=false
+    [[ "$(filter_scope_mode)" == "include-table" ]] && INCLUDE_TABLE_MODE=true
 else
     echo -e "${RED}Error:${NC} filters.ini not found at ${FILTERS_FILE}" >&2
     echo "  verify-migration.sh scopes its checks to the same object set the migration" >&2
@@ -235,6 +242,18 @@ echo -e "  Target : ${CYAN}$(redact "$TARGET_CONN")${NC}"
 echo -e "  Time   : $(date)"
 echo -e "  Options: row_tolerance=${ROW_TOLERANCE}%  spot_check_tables=${SPOT_CHECK_N}"
 echo -e "  Filters: ${CYAN}${FILTER_DESC}${NC}"
+
+# A filters.ini pgcopydb would reject, or one using sections these checks don't
+# model, means the scope derived here may not be the scope the migration ran with —
+# say so rather than silently comparing against a guess.
+FILTER_CONFLICT_DESC=$(filter_conflicts)
+if [[ -n "$FILTER_CONFLICT_DESC" ]]; then
+    log_warn "filters.ini uses a pgcopydb-disallowed section combination (${FILTER_CONFLICT_DESC}) — scope below assumes $(filter_scope_mode) mode"
+fi
+FILTER_UNKNOWN_DESC=$(filter_unknown_sections)
+if [[ -n "$FILTER_UNKNOWN_DESC" ]]; then
+    log_warn "filters.ini section(s) not modelled by these checks: ${FILTER_UNKNOWN_DESC} — objects they exclude may report as missing in target"
+fi
 
 # =============================================================================
 # 1. CONNECTIONS
@@ -293,6 +312,7 @@ TABLE_QUERY="
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind = 'r' $SCHEMA_SQL_FILTER
     $(schema_clause "n.nspname") $(table_clause "n.nspname" "c.relname")
+    $(extension_rel_clause "n.nspname" "c.relname")
     ORDER BY 1"
 
 SRC_TABLES=$(q "$SOURCE_CONN" "$TABLE_QUERY")
@@ -341,6 +361,8 @@ COL_QUERY="
     FROM information_schema.columns
     WHERE true $SCHEMA_SQL_FILTER_PLAIN
     $(schema_clause "table_schema") $(table_clause "table_schema" "table_name")
+    $(extension_rel_clause "table_schema" "table_name")
+    $(view_dep_clause "table_schema" "table_name")
     ORDER BY table_schema, table_name, ordinal_position"
 
 SRC_COLS=$(q "$SOURCE_CONN" "$COL_QUERY")
@@ -374,6 +396,8 @@ IDX_QUERY="
     WHERE true
     AND schemaname NOT IN ('pg_catalog','information_schema','pg_toast')
     $(schema_clause "schemaname") $(table_clause "schemaname" "tablename")
+    $(extension_rel_clause "schemaname" "tablename")
+    $(extension_rel_clause "schemaname" "indexname")
     ORDER BY 1"
 
 SRC_IDX=$(q "$SOURCE_CONN" "$IDX_QUERY")
@@ -404,6 +428,9 @@ CON_QUERY="
     JOIN pg_namespace n ON n.oid = t.relnamespace
     WHERE true $SCHEMA_SQL_FILTER
     $(schema_clause "n.nspname") $(table_clause "n.nspname" "t.relname")
+    $(extension_rel_clause "n.nspname" "t.relname")
+    $(extension_oid_clause "pg_constraint" "c.oid")
+    $(fk_target_clause "c.confrelid")
     ORDER BY 1"
 
 SRC_CON=$(q "$SOURCE_CONN" "$CON_QUERY")
@@ -420,6 +447,10 @@ fi
 # =============================================================================
 # 6. VIEWS
 # =============================================================================
+if [[ "$INCLUDE_TABLE_MODE" == "true" ]]; then
+    log_section "6/11  VIEWS  (skipped — include-only-table mode)"
+    log_info "pgcopydb copies the listed tables only, not views sharing their schemas"
+else
 log_section "6/11  VIEWS"
 
 VIEW_QUERY="
@@ -427,6 +458,7 @@ VIEW_QUERY="
     FROM pg_views
     WHERE schemaname NOT IN ('pg_catalog','information_schema')
     $(schema_clause "schemaname")
+    $(view_dep_clause "schemaname" "viewname")
     ORDER BY 1"
 
 SRC_VIEWS=$(q "$SOURCE_CONN" "$VIEW_QUERY")
@@ -439,10 +471,15 @@ else
     log_fail "Views missing in target:"
     echo "$MISSING_VIEWS" | while IFS= read -r v; do printf "       %s\n" "$v"; done
 fi
+fi
 
 # =============================================================================
 # 7. FUNCTIONS / PROCEDURES
 # =============================================================================
+if [[ "$INCLUDE_TABLE_MODE" == "true" ]]; then
+    log_section "7/11  FUNCTIONS & PROCEDURES  (skipped — include-only-table mode)"
+    log_info "pgcopydb copies the listed tables only, not routines sharing their schemas"
+else
 log_section "7/11  FUNCTIONS & PROCEDURES"
 
 FUNC_QUERY="
@@ -453,6 +490,7 @@ FUNC_QUERY="
     JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE true $SCHEMA_SQL_FILTER
     $(schema_clause "n.nspname")
+    $(extension_oid_clause "pg_proc" "p.oid")
     ORDER BY 1"
 
 SRC_FUNCS=$(q "$SOURCE_CONN" "$FUNC_QUERY")
@@ -464,6 +502,7 @@ if [[ -z "$MISSING_FUNCS" ]]; then
 else
     log_fail "Functions/procedures missing in target ($(line_count "$MISSING_FUNCS")):"
     echo "$MISSING_FUNCS" | head -20 | while IFS= read -r f; do printf "       %s\n" "$f"; done
+fi
 fi
 
 # =============================================================================
@@ -479,6 +518,7 @@ ROWCNT_QUERY="
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind = 'r' $SCHEMA_SQL_FILTER
     $(schema_clause "n.nspname") $(table_clause "n.nspname" "c.relname")
+    $(extension_rel_clause "n.nspname" "c.relname")
     ORDER BY c.reltuples DESC"
 
 SRC_ROWCNTS=$(q "$SOURCE_CONN" "$ROWCNT_QUERY")
@@ -516,6 +556,10 @@ fi
 # =============================================================================
 # 9. SEQUENCES
 # =============================================================================
+if [[ "$INCLUDE_TABLE_MODE" == "true" ]]; then
+    log_section "9/11  SEQUENCES  (skipped — include-only-table mode)"
+    log_info "the listed tables' own sequences travel with them; standalone sequences are not copied, so source and target cannot be compared here"
+else
 log_section "9/11  SEQUENCES"
 
 SEQ_QUERY="
@@ -524,6 +568,8 @@ SEQ_QUERY="
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind = 'S' $SCHEMA_SQL_FILTER
     $(schema_clause "n.nspname")
+    $(extension_rel_clause "n.nspname" "c.relname")
+    $(sequence_owner_clause "n.nspname" "c.relname")
     ORDER BY 1"
 
 SRC_SEQS=$(q "$SOURCE_CONN" "$SEQ_QUERY")
@@ -543,6 +589,8 @@ SEQ_VAL_QUERY="
     FROM pg_sequences
     WHERE schemaname NOT IN ('pg_catalog','information_schema')
     $(schema_clause "schemaname")
+    $(extension_rel_clause "schemaname" "sequencename")
+    $(sequence_owner_clause "schemaname" "sequencename")
     ORDER BY 1"
 
 SRC_SEQVALS=$(q "$SOURCE_CONN" "$SEQ_VAL_QUERY")
@@ -563,6 +611,7 @@ done < <(join -t$'\t' \
     <(echo "$TGT_SEQVALS" | sort -t$'\t' -k1,1))
 
 [[ $SEQ_BEHIND -eq 0 ]] && log_pass "Sequence values look consistent"
+fi
 
 # =============================================================================
 # 10. DATA SPOT-CHECK  (MIN / MAX on indexed PK columns — uses index, no scan)
@@ -592,6 +641,7 @@ else
           AND array_length(c.conkey, 1) = 1
           $SCHEMA_SQL_FILTER
           $(schema_clause "n.nspname") $(table_clause "n.nspname" "t.relname")
+          $(extension_rel_clause "n.nspname" "t.relname")
         ORDER BY sz.reltuples DESC
         LIMIT $SPOT_CHECK_N"
 
@@ -673,6 +723,7 @@ else
           AND pg_total_relation_size(c.oid) BETWEEN 1 AND ${EXACT_MAX_BYTES}
           $SCHEMA_SQL_FILTER
           $(schema_clause "n.nspname") $(table_clause "n.nspname" "c.relname")
+          $(extension_rel_clause "n.nspname" "c.relname")
         ORDER BY random()
         LIMIT ${EXACT_COUNT_N}"
 
@@ -686,6 +737,7 @@ else
         printf "\n       %-52s  %10s  %14s  %14s  %s\n" "TABLE" "SIZE" "SOURCE_COUNT" "TARGET_COUNT" "STATUS"
         printf "       %s\n" "$(printf '─%.0s' {1..110})"
 
+        # shellcheck disable=SC2034  # size_bytes is read positionally, only size_h is printed
         while IFS=$'\t' read -r table size_bytes size_h qtable; do
             [[ -z "$table" ]] && continue
 
