@@ -356,6 +356,10 @@ Resources:
 
                 # Target Database (PlanetScale)
                 PGCOPYDB_TARGET_PGURI="postgresql://user:password@target-host.connect.psdb.cloud:5432/dbname?sslmode=require"
+
+                # Parallelism tuning (used by run-migration.sh, resume-migration.sh, resume-cdc.sh)
+                TABLE_JOBS=8
+                INDEX_JOBS=6
               mode: '000600'
               owner: ubuntu
               group: ubuntu

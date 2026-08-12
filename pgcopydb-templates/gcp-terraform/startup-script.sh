@@ -106,6 +106,10 @@ PGCOPYDB_SOURCE_PGURI="postgresql://user:password@source-host:5432/dbname?sslmod
 
 # Target Database (PlanetScale)
 PGCOPYDB_TARGET_PGURI="postgresql://user:password@target-host.connect.psdb.cloud:5432/dbname?sslmode=require"
+
+# Parallelism tuning (used by run-migration.sh, resume-migration.sh, resume-cdc.sh)
+TABLE_JOBS=8
+INDEX_JOBS=6
 ENV_EOF
 chmod 600 /home/ubuntu/.env
 chown ubuntu:ubuntu /home/ubuntu/.env
