@@ -54,8 +54,8 @@ echo "Resuming migration in: $MIGRATION_DIR"
 
 LOGFILE=$MIGRATION_DIR/migration.log
 FILTER_FILE=~/filters.ini
-TABLE_JOBS=16
-INDEX_JOBS=12
+TABLE_JOBS="${TABLE_JOBS:-8}"
+INDEX_JOBS="${INDEX_JOBS:-6}"
 
 cd "$MIGRATION_DIR"
 # Core dumps help debug rare native crashes; not required for a successful migrate.

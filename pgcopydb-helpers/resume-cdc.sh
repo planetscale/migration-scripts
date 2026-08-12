@@ -40,7 +40,7 @@ echo "Resuming CDC in: $MIGRATION_DIR"
 
 LOGFILE=$MIGRATION_DIR/migration.log
 FILTER_FILE=~/filters.ini
-TABLE_JOBS=16
+TABLE_JOBS="${TABLE_JOBS:-8}"
 
 cd "$MIGRATION_DIR"
 # Core dumps help debug rare native crashes; not required for a successful migrate.

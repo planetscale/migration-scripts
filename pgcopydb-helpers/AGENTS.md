@@ -12,6 +12,10 @@ All scripts read connection strings from `~/.env`:
 export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
 export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
 export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
+
+# parallelism tuning, shared by all migration scripts
+export TABLE_JOBS=8    # default 8
+export INDEX_JOBS=6    # default 6
 ```
 
 ## Script Reference
@@ -188,9 +192,9 @@ Starts a full `pgcopydb clone --follow` migration. Creates a new timestamped dir
 ~/run-migration.sh
 ```
 
-**Default configuration (edit the script to adjust):**
-- `TABLE_JOBS=16` — parallel COPY workers
-- `INDEX_JOBS=12` — parallel index creation workers
+**Default configuration:**
+- `TABLE_JOBS=8` — parallel COPY workers (set in `~/.env`)
+- `INDEX_JOBS=6` — parallel index creation workers (set in `~/.env`)
 - `--split-tables-larger-than 50GB` — splits large tables into parts
 - `--split-max-parts` matches TABLE_JOBS
 - `--plugin wal2json` — logical decoding plugin for CDC
@@ -549,14 +553,14 @@ IF SOMETHING GOES WRONG:
 
 ## Configuration
 
-All scripts use variables at the top that can be adjusted per migration. See [Cluster configuration parameters](https://planetscale.com/docs/postgres/cluster-configuration/parameters) for understanding target-side capacity when tuning these values:
+`TABLE_JOBS` and `INDEX_JOBS` are set once in `~/.env` and picked up by every script that uses them; the others are variables at the top of each script. See [Cluster configuration parameters](https://planetscale.com/docs/postgres/cluster-configuration/parameters) for understanding target-side capacity when tuning these values:
 
-| Variable | Default | Used in |
-|----------|---------|---------|
-| `TABLE_JOBS` | 16 | run-migration.sh, resume-migration.sh |
-| `INDEX_JOBS` | 12 | run-migration.sh, resume-migration.sh |
-| `FILTER_FILE` | ~/filters.ini | run-migration.sh, resume-migration.sh, resume-cdc.sh |
-| `--split-tables-larger-than` | 50GB | run-migration.sh, resume-migration.sh |
+| Variable | Default | Set in | Used in |
+|----------|---------|--------|---------|
+| `TABLE_JOBS` | 8 | `~/.env` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
+| `INDEX_JOBS` | 6 | `~/.env` | run-migration.sh, resume-migration.sh |
+| `FILTER_FILE` | ~/filters.ini | script | run-migration.sh, resume-migration.sh, resume-cdc.sh |
+| `--split-tables-larger-than` | 50GB | script | run-migration.sh, resume-migration.sh |
 
 ## Critical Warnings
 

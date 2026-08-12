@@ -119,6 +119,10 @@ SHOW wal_level;  -- should return 'logical'
    export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
    export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
    export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
+
+   # parallelism tuning
+   export TABLE_JOBS=8    # default 8
+   export INDEX_JOBS=6    # default 6
    ```
 
 3. **Customize `~/filters.ini`** to exclude schemas, tables, and extensions that should not be migrated. See [Filter Configuration](#filter-configuration) below.
@@ -352,14 +356,13 @@ google_ml_integration
 
 ## Script Configuration
 
-The migration scripts have tunable parameters at the top of each file:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `TABLE_JOBS` | 16 | Parallel COPY workers |
-| `INDEX_JOBS` | 12 | Parallel index creation workers |
-| `--split-tables-larger-than` | 50GB | Threshold for splitting large tables into parts |
-| `--split-max-parts` | Same as TABLE_JOBS | Maximum number of parts per split table |
+| Parameter | Default | Source | Description |
+|-----------|---------|--------|-------------|
+| `TABLE_JOBS` | 8 | `~/.env` | Parallel COPY workers |
+| `INDEX_JOBS` | 6 | `~/.env` | Parallel index creation workers |
+| `--split-tables-larger-than` | 50GB | script | Threshold for splitting large tables into parts |
+| `--split-max-parts` | Same as TABLE_JOBS | script | Maximum number of parts per split table |
 
 Adjust these based on your instance size and database characteristics. More jobs require more CPU cores and memory. A good baseline for `TABLE_JOBS` is fewer than the vCPU count of whichever is smaller — the SOURCE or TARGET. `INDEX_JOBS` should be fewer than the vCPUs on the TARGET. Exceeding these numbers can overwhelm the SOURCE during the COPY phase or the TARGET during index rebuilding. See [Cluster configuration parameters](https://planetscale.com/docs/postgres/cluster-configuration/parameters) for understanding target-side capacity.
 
