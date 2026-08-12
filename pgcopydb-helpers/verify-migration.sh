@@ -60,7 +60,7 @@ if [[ ! -f ~/.env ]]; then
 fi
 set +u
 set -a
-# shellcheck source=/dev/null  # user-supplied file, not in the repo
+# shellcheck source=/dev/null  # user-supplied, not in the repo
 source ~/.env
 set +a
 set -u
@@ -212,10 +212,9 @@ SCHEMA_SQL_FILTER_PLAIN="AND table_schema NOT IN ('pg_catalog','information_sche
 if [[ -f "$FILTERS_FILE" ]]; then
     parse_filters_ini "$FILTERS_FILE"
     FILTER_DESC="$FILTERS_FILE — $(filter_scope_describe)"
-    # pgcopydb in include-only-table mode copies the listed tables together with
-    # their own indexes, constraints and sequences — but not the views, routines or
-    # standalone sequences that merely share those schemas. Comparing those would
-    # report guaranteed false alarms, so checks 6/7/9 are skipped in this mode.
+    # include-only-table copies the listed tables plus their own indexes, constraints
+    # and sequences — but not the views, routines or standalone sequences that merely
+    # share those schemas, so checks 6/7/9 are skipped rather than false-alarmed.
     INCLUDE_TABLE_MODE=false
     [[ "$(filter_scope_mode)" == "include-table" ]] && INCLUDE_TABLE_MODE=true
 else
@@ -243,9 +242,6 @@ echo -e "  Time   : $(date)"
 echo -e "  Options: row_tolerance=${ROW_TOLERANCE}%  spot_check_tables=${SPOT_CHECK_N}"
 echo -e "  Filters: ${CYAN}${FILTER_DESC}${NC}"
 
-# A filters.ini pgcopydb would reject, or one using sections these checks don't
-# model, means the scope derived here may not be the scope the migration ran with —
-# say so rather than silently comparing against a guess.
 FILTER_CONFLICT_DESC=$(filter_conflicts)
 if [[ -n "$FILTER_CONFLICT_DESC" ]]; then
     log_warn "filters.ini uses a pgcopydb-disallowed section combination (${FILTER_CONFLICT_DESC}) — scope below assumes $(filter_scope_mode) mode"
@@ -737,7 +733,7 @@ else
         printf "\n       %-52s  %10s  %14s  %14s  %s\n" "TABLE" "SIZE" "SOURCE_COUNT" "TARGET_COUNT" "STATUS"
         printf "       %s\n" "$(printf '─%.0s' {1..110})"
 
-        # shellcheck disable=SC2034  # size_bytes is read positionally, only size_h is printed
+        # shellcheck disable=SC2034  # size_bytes is read positionally, size_h is printed
         while IFS=$'\t' read -r table size_bytes size_h qtable; do
             [[ -z "$table" ]] && continue
 
