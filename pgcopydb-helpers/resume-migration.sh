@@ -14,6 +14,11 @@
 set -eo pipefail
 
 # --- Load environment ---
+if [ ! -f ~/.env ]; then
+    echo "ERROR: ~/.env not found. Create it from the template:" >&2
+    echo "  cp ~/env-template ~/.env && chmod 600 ~/.env" >&2
+    exit 1
+fi
 set +u
 set -a
 source ~/.env
@@ -53,9 +58,14 @@ fi
 echo "Resuming migration in: $MIGRATION_DIR"
 
 LOGFILE=$MIGRATION_DIR/migration.log
-FILTER_FILE=~/filters.ini
+
+# Tunables come from ~/.env. See env-template for the full list.
+# Keep these in sync with run-migration.sh — a resume must use the same values.
+FILTER_FILE="${FILTER_FILE:-$HOME/filters.ini}"
 TABLE_JOBS="${TABLE_JOBS:-8}"
 INDEX_JOBS="${INDEX_JOBS:-6}"
+SPLIT_TABLES_LARGER_THAN="${SPLIT_TABLES_LARGER_THAN:-50GB}"
+OUTPUT_PLUGIN="${OUTPUT_PLUGIN:-pgoutput}"
 
 cd "$MIGRATION_DIR"
 # Core dumps help debug rare native crashes; not required for a successful migrate.
@@ -75,11 +85,13 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
     echo "=========================================="
     echo "Resuming clone --follow at $(date)"
     echo "Migration dir: $MIGRATION_DIR"
+    echo "Plugin: $OUTPUT_PLUGIN | table-jobs: $TABLE_JOBS | index-jobs: $INDEX_JOBS"
+    echo "Split tables larger than: $SPLIT_TABLES_LARGER_THAN | filter: $FILTER_FILE"
     echo "=========================================="
 
     "$PGCOPYDB_BIN" clone \
         --follow \
-        --plugin wal2json \
+        --plugin "$OUTPUT_PLUGIN" \
         --resume \
         --not-consistent \
         --verbose \
@@ -91,7 +103,7 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
         --skip-db-properties \
         --table-jobs "$TABLE_JOBS" \
         --index-jobs "$INDEX_JOBS" \
-        --split-tables-larger-than 50GB \
+        --split-tables-larger-than "$SPLIT_TABLES_LARGER_THAN" \
         --split-max-parts "$TABLE_JOBS" \
         --dir "$MIGRATION_DIR"
 

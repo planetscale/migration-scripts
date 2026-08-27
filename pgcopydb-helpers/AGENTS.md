@@ -6,17 +6,33 @@ This file provides guidance to AI coding assistants (Claude Code, Cursor, Copilo
 
 These scripts run on a **migration instance** (EC2 or GCP Compute) that sits between the source PostgreSQL database and the [PlanetScale for Postgres](https://planetscale.com/docs/postgres/) target. The instance has pgcopydb installed and network access to both databases.
 
-All scripts read connection strings from `~/.env`:
+All scripts read their configuration from `~/.env`. This repo owns the reference copy: `env-template`. The user copies it to `~/.env` and edits the values:
+
+```bash
+cp ~/env-template ~/.env
+chmod 600 ~/.env
+```
 
 ```bash
 export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
 export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
-export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
 
-# parallelism tuning, shared by all migration scripts
-export TABLE_JOBS=8    # default 8
-export INDEX_JOBS=6    # default 6
+export TABLE_JOBS=8                       # parallel COPY workers
+export INDEX_JOBS=6                       # parallel index build workers
+export SPLIT_TABLES_LARGER_THAN=50GB      # copy larger tables in parts
+export OUTPUT_PLUGIN=pgoutput             # logical decoding plugin for CDC
+export FILTER_FILE=~/filters.ini          # pgcopydb filter file
+
+#export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional
 ```
+
+Each script applies the same default if a variable is unset, with the form `TABLE_JOBS="${TABLE_JOBS:-8}"`. To add a new tunable, edit `env-template`, the scripts that use it, the Configuration table below, and the Script Configuration table in `README.md`.
+
+The `pgcopydb-templates/` templates no longer create `~/.env`. They copy the whole `pgcopydb-helpers/` directory to `/home/ubuntu/`, so `env-template` arrives with the scripts and the user makes `~/.env` from it. Do not add `.env` generation back to a template.
+
+`env-template` cannot be named `.env` in this repo. `.gitignore` blocks that name to keep credentials out of git, and the templates deploy with `cp -r pgcopydb-helpers/* /home/ubuntu/`, where the shell glob `*` does not match dotfiles.
+
+Every script that sources `~/.env` first checks that the file exists and, if not, prints the `cp ~/env-template ~/.env` command and exits 1. Keep that guard in any new script that reads `~/.env`.
 
 ## Script Reference
 
@@ -192,17 +208,16 @@ Starts a full `pgcopydb clone --follow` migration. Creates a new timestamped dir
 ~/run-migration.sh
 ```
 
-**Default configuration:**
-- `TABLE_JOBS=8` — parallel COPY workers (set in `~/.env`)
-- `INDEX_JOBS=6` — parallel index creation workers (set in `~/.env`)
-- `--split-tables-larger-than 50GB` — splits large tables into parts
-- `--split-max-parts` matches TABLE_JOBS
-- `--plugin wal2json` — logical decoding plugin for CDC
-- `--filter ~/filters.ini`
+**Default configuration (all values come from `~/.env`):**
+- `TABLE_JOBS=8` — parallel COPY workers, also used for `--split-max-parts`
+- `INDEX_JOBS=6` — parallel index creation workers
+- `SPLIT_TABLES_LARGER_THAN=50GB` — splits large tables into parts
+- `OUTPUT_PLUGIN=pgoutput` — logical decoding plugin for CDC
+- `FILTER_FILE=~/filters.ini`
 
 **When to use:** Starting a fresh migration. For a COPY-only test (no CDC), remove the `--follow` and `--plugin` flags.
 
-**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, `~/filters.ini`
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`, the file named by `FILTER_FILE`
 
 ---
 
@@ -354,7 +369,7 @@ Resumes a previously interrupted `pgcopydb clone --follow` migration. Backs up t
 MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh          # specify explicitly
 ```
 
-**Important:** The script passes `--split-tables-larger-than` to match `run-migration.sh`. pgcopydb requires catalog consistency — if the original run used split tables, the resume must pass the same value.
+**Important:** The script reads `SPLIT_TABLES_LARGER_THAN` and `OUTPUT_PLUGIN` from the same `~/.env` as `run-migration.sh`. pgcopydb requires catalog consistency — do not change either value between the original run and the resume.
 
 **When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. To start completely over instead, run `~/target-clean.sh` + `~/drop-replication-slots.sh` first, then `~/start-migration-screen.sh`.
 
@@ -408,6 +423,7 @@ Cleans up pgcopydb replication artifacts on both source and target databases.
 
 **What it cleans:**
 - **Source:** Drops the logical replication slot (terminates active consumer if needed)
+- **Source:** Drops the publication of the same name. pgcopydb creates it only for the `pgoutput` plugin. The drop needs ownership of the publication; the script warns and continues if it fails
 - **Target:** Drops the replication origin and the `pgcopydb` sentinel schema
 
 **When to use:** After a migration completes or is abandoned. Replication slots that are not consumed will cause WAL to accumulate on the source until the disk fills up. Always clean up slots when done.
@@ -553,14 +569,26 @@ IF SOMETHING GOES WRONG:
 
 ## Configuration
 
-`TABLE_JOBS` and `INDEX_JOBS` are set once in `~/.env` and picked up by every script that uses them; the others are variables at the top of each script. See [Cluster configuration parameters](https://planetscale.com/docs/postgres/cluster-configuration/parameters) for understanding target-side capacity when tuning these values:
+Every tunable is set once in `~/.env` and picked up by every script that uses it. No script hardcodes these values. See [Cluster configuration parameters](https://planetscale.com/docs/postgres/cluster-configuration/parameters) for understanding target-side capacity when tuning them:
 
-| Variable | Default | Set in | Used in |
-|----------|---------|--------|---------|
-| `TABLE_JOBS` | 8 | `~/.env` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
-| `INDEX_JOBS` | 6 | `~/.env` | run-migration.sh, resume-migration.sh |
-| `FILTER_FILE` | ~/filters.ini | script | run-migration.sh, resume-migration.sh, resume-cdc.sh |
-| `--split-tables-larger-than` | 50GB | script | run-migration.sh, resume-migration.sh |
+| Variable | Default | pgcopydb option | Used in |
+|----------|---------|-----------------|---------|
+| `PGCOPYDB_SOURCE_PGURI` | none (required) | `--source` | all scripts |
+| `PGCOPYDB_TARGET_PGURI` | none (required) | `--target` | all scripts |
+| `TABLE_JOBS` | 8 | `--table-jobs`, `--split-max-parts` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
+| `INDEX_JOBS` | 6 | `--index-jobs` | run-migration.sh, resume-migration.sh |
+| `SPLIT_TABLES_LARGER_THAN` | 50GB | `--split-tables-larger-than` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
+| `OUTPUT_PLUGIN` | pgoutput | `--plugin` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
+| `FILTER_FILE` | `~/filters.ini` | `--filter` | run-migration.sh, resume-migration.sh, resume-cdc.sh, preflight-check.sh, verify-migration.sh |
+| `SLACK_WEBHOOK_URL` | unset | — | slack-migration-alerts.sh |
+
+### `OUTPUT_PLUGIN`
+
+`pgoutput` is the default. It is part of PostgreSQL core, so the source server needs no extension. pgcopydb builds a publication from the table list in `FILTER_FILE` and drops it during `pgcopydb stream cleanup`. Compared to `wal2json` it sends about 4.5x less network volume and uses about 4x less CPU on the source.
+
+`wal2json` and `test_decoding` remain supported. Set `OUTPUT_PLUGIN=wal2json` to use the previous plugin; the source server must have the `wal2json` extension installed.
+
+`OUTPUT_PLUGIN` and `SPLIT_TABLES_LARGER_THAN` must not change between a run and its resume. pgcopydb requires catalog consistency.
 
 ## Critical Warnings
 

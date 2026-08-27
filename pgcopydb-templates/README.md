@@ -17,8 +17,19 @@ All three templates produce an equivalent migration instance — choose based on
 - A compute instance with pgcopydb and PostgreSQL 18 client tools
 - An attached data volume for migration working data
 - Network and access configuration (security group/firewall rule, IAM/SSH via SSM or IAP)
-- Migration helper scripts from this repo deployed to `/home/ubuntu/`
+- Migration helper scripts from this repo deployed to `/home/ubuntu/`, including `env-template`
+
+The templates do not create `~/.env`. The helper scripts own that file, and `env-template` is its reference copy.
 
 ## After Provisioning
 
-Once the instance is running, connect to it and follow the [migration workflow](../pgcopydb-helpers/README.md#migration-workflow) starting with setting up `~/.env` and `~/filters.ini`.
+Connect to the instance, then create the configuration file that every helper script reads:
+
+```bash
+cp ~/env-template ~/.env
+chmod 600 ~/.env
+```
+
+Edit `~/.env` and set `PGCOPYDB_SOURCE_PGURI` and `PGCOPYDB_TARGET_PGURI`. The other settings have working defaults — see [Script Configuration](../pgcopydb-helpers/README.md#script-configuration).
+
+Then customize `~/filters.ini` and follow the [migration workflow](../pgcopydb-helpers/README.md#migration-workflow).

@@ -96,24 +96,6 @@ alias psql-version='psql --version'
 alias check-planetscale='nc -zv app.connect.psdb.cloud 443 2>&1 | grep succeeded'
 PROFILE_EOF
 
-# .env file
-cat > /home/ubuntu/.env << 'ENV_EOF'
-# PlanetScale Migration Environment Variables
-# Edit these values before running the migration
-
-# Source Database
-PGCOPYDB_SOURCE_PGURI="postgresql://user:password@source-host:5432/dbname?sslmode=require"
-
-# Target Database (PlanetScale)
-PGCOPYDB_TARGET_PGURI="postgresql://user:password@target-host.connect.psdb.cloud:5432/dbname?sslmode=require"
-
-# Parallelism tuning (used by run-migration.sh, resume-migration.sh, resume-cdc.sh)
-TABLE_JOBS=8
-INDEX_JOBS=6
-ENV_EOF
-chmod 600 /home/ubuntu/.env
-chown ubuntu:ubuntu /home/ubuntu/.env
-
 # Pull PlanetScale migration helper scripts
 echo "Cloning PlanetScale migration helper scripts..."
 git clone --depth 1 https://github.com/planetscale/migration-scripts.git /tmp/migration-scripts

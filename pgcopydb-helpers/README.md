@@ -113,16 +113,37 @@ SHOW wal_level;  -- should return 'logical'
 
 1. **Deploy these scripts** to the migration instance home directory (`~/`).
 
-2. **Create `~/.env`** with your connection strings:
+2. **Create `~/.env` from `~/env-template`** and edit the values:
+
+   ```bash
+   cp ~/env-template ~/.env
+   chmod 600 ~/.env
+   ```
+
+   `env-template` holds every setting the scripts read. Only the two connection
+   strings are required. The remaining settings have working defaults:
 
    ```bash
    export PGCOPYDB_SOURCE_PGURI='postgresql://user:pass@source-host:5432/dbname'
    export PGCOPYDB_TARGET_PGURI='postgresql://user:pass@target-host:5432/dbname'
-   export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional, for Slack alerts
 
-   # parallelism tuning
-   export TABLE_JOBS=8    # default 8
-   export INDEX_JOBS=6    # default 6
+   export TABLE_JOBS=8                       # parallel COPY workers
+   export INDEX_JOBS=6                       # parallel index build workers
+   export SPLIT_TABLES_LARGER_THAN=50GB      # copy larger tables in parts
+   export OUTPUT_PLUGIN=pgoutput             # logical decoding plugin for CDC
+   export FILTER_FILE=~/filters.ini          # pgcopydb filter file
+
+   #export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional
+   ```
+
+   See [Script Configuration](#script-configuration) for how to tune each value.
+
+   The provisioning templates do not create `~/.env` for you. Every script stops
+   with this message until you create it:
+
+   ```
+   ERROR: ~/.env not found. Create it from the template:
+     cp ~/env-template ~/.env && chmod 600 ~/.env
    ```
 
 3. **Customize `~/filters.ini`** to exclude schemas, tables, and extensions that should not be migrated. See [Filter Configuration](#filter-configuration) below.
@@ -237,7 +258,7 @@ After the migration is complete (or abandoned), clean up replication artifacts:
 ~/drop-replication-slots.sh my_slot      # custom slot name
 ```
 
-This drops the replication slot on the source, the replication origin on the target, and the pgcopydb sentinel schema. **Always do this** — unconsumed replication slots cause WAL to accumulate on the source until the disk fills up.
+This drops the replication slot on the source, the replication origin on the target, and the pgcopydb sentinel schema. It also drops the publication that pgcopydb creates on the source for the `pgoutput` plugin, which carries the same name as the slot. **Always do this** — unconsumed replication slots cause WAL to accumulate on the source until the disk fills up.
 
 ## Recovery
 
@@ -257,7 +278,7 @@ If pgcopydb crashes, the instance reboots, or the migration is interrupted:
 MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh              # or specify explicitly
 ```
 
-This backs up the SQLite catalog before resuming and uses `--not-consistent` to allow resuming from a mid-transaction state. The script passes `--split-tables-larger-than` to match `run-migration.sh` — pgcopydb requires catalog consistency, so the resume must use the same split value as the original run.
+This backs up the SQLite catalog before resuming and uses `--not-consistent` to allow resuming from a mid-transaction state. The script reads `SPLIT_TABLES_LARGER_THAN` and `OUTPUT_PLUGIN` from the same `~/.env` as `run-migration.sh` — pgcopydb requires catalog consistency, so do not change these values between the original run and the resume.
 
 If the initial COPY completed successfully but CDC was interrupted, you can resume only the CDC phase without re-attempting the clone:
 
@@ -278,7 +299,7 @@ To start completely over, wipe the target and clean up replication:
 
 ## Filter Configuration
 
-Every migration needs a `~/filters.ini` file to exclude objects that should not be copied. Use the filter to exclude source-specific schemas, tables, and extensions that are not needed on the target — particularly extensions not [supported by PlanetScale](https://planetscale.com/docs/postgres/extensions). The file uses pgcopydb's [filter syntax](https://github.com/planetscale/pgcopydb/blob/main/docs/ref/pgcopydb_filter.rst):
+Every migration needs a filter file to exclude objects that should not be copied. The scripts read the path from `FILTER_FILE` in `~/.env`, which defaults to `~/filters.ini`. Use the filter to exclude source-specific schemas, tables, and extensions that are not needed on the target — particularly extensions not [supported by PlanetScale](https://planetscale.com/docs/postgres/extensions). The file uses pgcopydb's [filter syntax](https://github.com/planetscale/pgcopydb/blob/main/docs/ref/pgcopydb_filter.rst):
 
 ```ini
 [exclude-schema]
@@ -356,15 +377,34 @@ google_ml_integration
 
 ## Script Configuration
 
+Every tunable setting lives in `~/.env`. Change a value once and all scripts use it. `env-template` in this directory is the reference copy.
 
-| Parameter | Default | Source | Description |
-|-----------|---------|--------|-------------|
-| `TABLE_JOBS` | 8 | `~/.env` | Parallel COPY workers |
-| `INDEX_JOBS` | 6 | `~/.env` | Parallel index creation workers |
-| `--split-tables-larger-than` | 50GB | script | Threshold for splitting large tables into parts |
-| `--split-max-parts` | Same as TABLE_JOBS | script | Maximum number of parts per split table |
+| Variable | Default | pgcopydb option | Description |
+|----------|---------|-----------------|-------------|
+| `PGCOPYDB_SOURCE_PGURI` | none (required) | `--source` | Source connection string |
+| `PGCOPYDB_TARGET_PGURI` | none (required) | `--target` | Target connection string |
+| `TABLE_JOBS` | 8 | `--table-jobs`, `--split-max-parts` | Parallel COPY workers |
+| `INDEX_JOBS` | 6 | `--index-jobs` | Parallel index build workers |
+| `SPLIT_TABLES_LARGER_THAN` | 50GB | `--split-tables-larger-than` | Size above which a table is copied in parts |
+| `OUTPUT_PLUGIN` | pgoutput | `--plugin` | Logical decoding plugin for CDC |
+| `FILTER_FILE` | `~/filters.ini` | `--filter` | pgcopydb filter file |
+| `SLACK_WEBHOOK_URL` | unset | — | Webhook for `slack-migration-alerts.sh` |
 
-Adjust these based on your instance size and database characteristics. More jobs require more CPU cores and memory. A good baseline for `TABLE_JOBS` is fewer than the vCPU count of whichever is smaller — the SOURCE or TARGET. `INDEX_JOBS` should be fewer than the vCPUs on the TARGET. Exceeding these numbers can overwhelm the SOURCE during the COPY phase or the TARGET during index rebuilding. See [Cluster configuration parameters](https://planetscale.com/docs/postgres/cluster-configuration/parameters) for understanding target-side capacity.
+Adjust `TABLE_JOBS` and `INDEX_JOBS` based on your instance size and database characteristics. More jobs require more CPU cores and memory. A good baseline for `TABLE_JOBS` is fewer than the vCPU count of whichever is smaller — the SOURCE or TARGET. `INDEX_JOBS` should be fewer than the vCPUs on the TARGET. Exceeding these numbers can overwhelm the SOURCE during the COPY phase or the TARGET during index rebuilding. See [Cluster configuration parameters](https://planetscale.com/docs/postgres/cluster-configuration/parameters) for understanding target-side capacity.
+
+`SPLIT_TABLES_LARGER_THAN` must not change between a run and its resume. pgcopydb requires catalog consistency, so `resume-migration.sh` and `resume-cdc.sh` must use the same value as the original `run-migration.sh`. Set 0 to disable splitting.
+
+### Output plugin
+
+`OUTPUT_PLUGIN` selects the logical decoding plugin that pgcopydb uses for CDC. The default is `pgoutput`:
+
+- `pgoutput` is part of PostgreSQL core, so the source server needs no extension.
+- On a mixed INSERT/UPDATE/DELETE workload it sends about 4.5x less network volume and uses about 4x less CPU on the source than `wal2json`.
+- pgcopydb builds a publication from the table list in `FILTER_FILE`, so the source server does the filtering. `pgcopydb stream cleanup` drops that publication.
+
+Set `OUTPUT_PLUGIN=wal2json` to use the previous plugin. `wal2json` and `test_decoding` remain supported, but `wal2json` must be installed on the source server.
+
+Do not change `OUTPUT_PLUGIN` in the middle of a migration. A resume must use the same plugin as the original run.
 
 ## Troubleshooting
 
@@ -427,6 +467,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 
 | Script | Phase | Description |
 |--------|-------|-------------|
+| `env-template` | Prepare | Reference `~/.env`. Copy to `~/.env` and edit before you start |
 | `compare-pg-params.sh` | Prepare | Compare PostgreSQL parameters between source and target |
 | `preflight-check.sh` | Prepare | Validate migration prerequisites (connectivity, WAL level, permissions, slots, extension compatibility) |
 | `fix-replica-identity.sh` | Prepare | Set REPLICA IDENTITY FULL on tables without primary keys |
@@ -442,7 +483,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
 | `resume-cdc.sh` | Recovery | Resume only the CDC phase (skips clone) |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
-| `drop-replication-slots.sh` | Cleanup | Remove replication slots and origins |
+| `drop-replication-slots.sh` | Cleanup | Remove replication slots, the pgoutput publication, and origins |
 | `stop-cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
 | `verify-migration.sh` | Cutover | Verify schema and data consistency between source and target |
 
