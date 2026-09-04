@@ -1,0 +1,52 @@
+# pgcopydb migration environment
+#
+# Copy this file to ~/.env on the migration instance, then edit the values:
+#
+#     cp ~/env-template ~/.env
+#     chmod 600 ~/.env
+#
+# Every helper script in this directory reads ~/.env. Change a value here once
+# and all scripts use it. Do not commit a filled-in copy of this file.
+
+# ── Connection strings (required) ─────────────────────────────────────────────
+
+# Source database.
+export PGCOPYDB_SOURCE_PGURI='postgresql://user:password@source-host:5432/dbname?sslmode=require'
+
+# Target database (PlanetScale).
+export PGCOPYDB_TARGET_PGURI='postgresql://user:password@target-host.connect.psdb.cloud:5432/dbname?sslmode=require'
+
+# ── Parallelism ───────────────────────────────────────────────────────────────
+
+# Parallel COPY workers. Keep this below the vCPU count of the smaller of the
+# SOURCE and the TARGET. Also used as --split-max-parts.
+export TABLE_JOBS=8
+
+# Parallel index build workers. Keep this below the TARGET vCPU count.
+export INDEX_JOBS=6
+
+# ── Table splitting ───────────────────────────────────────────────────────────
+
+# pgcopydb copies tables larger than this size in parts. Set 0 to disable.
+# A resume must use the same value as the original run, because pgcopydb
+# requires catalog consistency.
+export SPLIT_TABLES_LARGER_THAN=50GB
+
+# ── Logical decoding ──────────────────────────────────────────────────────────
+
+# Output plugin for CDC. pgoutput is part of PostgreSQL core, so the source
+# server needs no extension. Use wal2json only if the migration needs it.
+export OUTPUT_PLUGIN=pgoutput
+
+# Publication the pgoutput plugin streams from, passed as --publication.
+export PUBLICATION_NAME=migration_pub
+
+# ── Filters ───────────────────────────────────────────────────────────────────
+
+# Path to the pgcopydb filter file. See filters.ini for the syntax.
+export FILTER_FILE=~/filters.ini
+
+# ── Slack alerts (optional) ───────────────────────────────────────────────────
+
+# Webhook used by slack-migration-alerts.sh. Leave unset to disable alerts.
+#export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'

@@ -9,6 +9,11 @@
 set -eo pipefail
 
 # --- Load environment ---
+if [ ! -f ~/.env ]; then
+    echo "ERROR: ~/.env not found. Create it from the template:" >&2
+    echo "  cp ~/env-template ~/.env && chmod 600 ~/.env" >&2
+    exit 1
+fi
 set +u
 set -a
 source ~/.env
@@ -17,6 +22,12 @@ set -u
 
 if [ -z "${PGCOPYDB_SOURCE_PGURI:-}" ] || [ -z "${PGCOPYDB_TARGET_PGURI:-}" ]; then
     echo "ERROR: PGCOPYDB_SOURCE_PGURI and PGCOPYDB_TARGET_PGURI must be set in ~/.env"
+    exit 1
+fi
+
+if [ -z "${PUBLICATION_NAME:-}" ]; then
+    echo "ERROR: PUBLICATION_NAME must be set in ~/.env"
+    echo "  Add: export PUBLICATION_NAME=migration_pub"
     exit 1
 fi
 # --- loaded ---
@@ -38,9 +49,14 @@ PGCOPYDB_BIN=$(find_pgcopydb) || { echo "ERROR: pgcopydb not found on PATH or un
 
 MIGRATION_DIR=~/migration_$(date +%Y%m%d-%H%M%S)
 LOGFILE=$MIGRATION_DIR/migration.log
-FILTER_FILE=~/filters.ini
-TABLE_JOBS=16
-INDEX_JOBS=12
+
+# Tunables come from ~/.env. See env-template for the full list.
+FILTER_FILE="${FILTER_FILE:-$HOME/filters.ini}"
+TABLE_JOBS="${TABLE_JOBS:-8}"
+INDEX_JOBS="${INDEX_JOBS:-6}"
+SPLIT_TABLES_LARGER_THAN="${SPLIT_TABLES_LARGER_THAN:-50GB}"
+OUTPUT_PLUGIN="${OUTPUT_PLUGIN:-pgoutput}"
+
 
 mkdir -p "$MIGRATION_DIR"
 cd "$MIGRATION_DIR"
@@ -57,11 +73,15 @@ fi
     echo ""
     echo "=========================================="
     echo "Starting clone --follow at $(date)"
+    echo "Plugin: $OUTPUT_PLUGIN | table-jobs: $TABLE_JOBS | index-jobs: $INDEX_JOBS"
+    echo "Publication: $PUBLICATION_NAME"
+    echo "Split tables larger than: $SPLIT_TABLES_LARGER_THAN | filter: $FILTER_FILE"
     echo "=========================================="
 
     "$PGCOPYDB_BIN" clone \
         --follow \
-        --plugin wal2json \
+        --plugin "$OUTPUT_PLUGIN" \
+        --publication "$PUBLICATION_NAME" \
         --verbose \
         --source "$PGCOPYDB_SOURCE_PGURI" \
         --target "$PGCOPYDB_TARGET_PGURI" \
@@ -71,7 +91,7 @@ fi
         --skip-db-properties \
         --table-jobs "$TABLE_JOBS" \
         --index-jobs "$INDEX_JOBS" \
-        --split-tables-larger-than 50GB \
+        --split-tables-larger-than "$SPLIT_TABLES_LARGER_THAN" \
         --split-max-parts "$TABLE_JOBS" \
         --dir "$MIGRATION_DIR"
 

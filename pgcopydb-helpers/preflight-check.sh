@@ -21,6 +21,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/filters-lib.sh"
 
 # --- Load environment ---
+if [ ! -f ~/.env ]; then
+    echo "ERROR: ~/.env not found. Create it from the template:" >&2
+    echo "  cp ~/env-template ~/.env && chmod 600 ~/.env" >&2
+    exit 1
+fi
 set +u
 set -a
 source ~/.env
@@ -81,8 +86,10 @@ tgt_query() {
     psql "$PGCOPYDB_TARGET_PGURI" -t -A -c "$1" 2>/dev/null || echo ""
 }
 
-# ── Pre-parse filters.ini (scope needed for source permission checks) ─
-[ -f ~/filters.ini ] && parse_filters_ini ~/filters.ini
+# ── Pre-parse the filter file (scope needed for source permission checks) ─
+# FILTER_FILE comes from ~/.env. See env-template.
+FILTER_FILE="${FILTER_FILE:-$HOME/filters.ini}"
+[ -f "$FILTER_FILE" ] && parse_filters_ini "$FILTER_FILE"
 
 # ══════════════════════════════════════════════════════════════════
 NOW=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
@@ -319,13 +326,13 @@ echo ""
 echo "  MIGRATION INSTANCE"
 echo "  ────────────────────────────────────────────────────────────────"
 
-# 14. filters.ini
-if [ -f ~/filters.ini ]; then
-    pass "filters.ini" "~/filters.ini found"
+# 14. filter file
+if [ -f "$FILTER_FILE" ]; then
+    pass "filters.ini" "$FILTER_FILE found"
     _conflicts=$(filter_conflicts)
     [ -n "$_conflicts" ] && warn "filters.ini combination" "$_conflicts — pgcopydb disallows these together"
 else
-    fail "filters.ini" "~/filters.ini not found"
+    fail "filters.ini" "$FILTER_FILE not found"
 fi
 
 # 15. pgcopydb binary
