@@ -24,6 +24,12 @@ if [ -z "${PGCOPYDB_SOURCE_PGURI:-}" ] || [ -z "${PGCOPYDB_TARGET_PGURI:-}" ]; t
     echo "ERROR: PGCOPYDB_SOURCE_PGURI and PGCOPYDB_TARGET_PGURI must be set in ~/.env"
     exit 1
 fi
+
+if [ -z "${PUBLICATION_NAME:-}" ]; then
+    echo "ERROR: PUBLICATION_NAME must be set in ~/.env"
+    echo "  Add: export PUBLICATION_NAME=migration_pub"
+    exit 1
+fi
 # --- loaded ---
 
 # --- Locate pgcopydb: prefer PATH, else highest-versioned PG install ---
@@ -51,6 +57,7 @@ INDEX_JOBS="${INDEX_JOBS:-6}"
 SPLIT_TABLES_LARGER_THAN="${SPLIT_TABLES_LARGER_THAN:-50GB}"
 OUTPUT_PLUGIN="${OUTPUT_PLUGIN:-pgoutput}"
 
+
 mkdir -p "$MIGRATION_DIR"
 cd "$MIGRATION_DIR"
 # Core dumps help debug rare native crashes; not required for a successful migrate.
@@ -67,12 +74,14 @@ fi
     echo "=========================================="
     echo "Starting clone --follow at $(date)"
     echo "Plugin: $OUTPUT_PLUGIN | table-jobs: $TABLE_JOBS | index-jobs: $INDEX_JOBS"
+    echo "Publication: $PUBLICATION_NAME"
     echo "Split tables larger than: $SPLIT_TABLES_LARGER_THAN | filter: $FILTER_FILE"
     echo "=========================================="
 
     "$PGCOPYDB_BIN" clone \
         --follow \
         --plugin "$OUTPUT_PLUGIN" \
+        --publication "$PUBLICATION_NAME" \
         --verbose \
         --source "$PGCOPYDB_SOURCE_PGURI" \
         --target "$PGCOPYDB_TARGET_PGURI" \

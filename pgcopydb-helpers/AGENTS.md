@@ -21,12 +21,15 @@ export TABLE_JOBS=8                       # parallel COPY workers
 export INDEX_JOBS=6                       # parallel index build workers
 export SPLIT_TABLES_LARGER_THAN=50GB      # copy larger tables in parts
 export OUTPUT_PLUGIN=pgoutput             # logical decoding plugin for CDC
+export PUBLICATION_NAME=migration_pub     # existing publication for pgoutput
 export FILTER_FILE=~/filters.ini          # pgcopydb filter file
 
 #export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'  # optional
 ```
 
 Each script applies the same default if a variable is unset, with the form `TABLE_JOBS="${TABLE_JOBS:-8}"`. To add a new tunable, edit `env-template`, the scripts that use it, the Configuration table below, and the Script Configuration table in `README.md`.
+
+`PUBLICATION_NAME` is the one exception: it has **no fallback**. `run-migration.sh`, `resume-migration.sh` and `resume-cdc.sh` exit 1 next to the connection-string check if it is unset or empty, because pgcopydb requires the publication to already exist and there is no sensible default to invent. An instance whose `~/.env` predates the variable must add it before those scripts will run.
 
 The `pgcopydb-templates/` templates no longer create `~/.env`. They copy the whole `pgcopydb-helpers/` directory to `/home/ubuntu/`, so `env-template` arrives with the scripts and the user makes `~/.env` from it. Do not add `.env` generation back to a template.
 
@@ -213,6 +216,7 @@ Starts a full `pgcopydb clone --follow` migration. Creates a new timestamped dir
 - `INDEX_JOBS=6` — parallel index creation workers
 - `SPLIT_TABLES_LARGER_THAN=50GB` — splits large tables into parts
 - `OUTPUT_PLUGIN=pgoutput` — logical decoding plugin for CDC
+- `PUBLICATION_NAME=migration_pub` — passed as `--publication`; required, the script exits 1 if it is not set
 - `FILTER_FILE=~/filters.ini`
 
 **When to use:** Starting a fresh migration. For a COPY-only test (no CDC), remove the `--follow` and `--plugin` flags.
@@ -369,7 +373,7 @@ Resumes a previously interrupted `pgcopydb clone --follow` migration. Backs up t
 MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-migration.sh          # specify explicitly
 ```
 
-**Important:** The script reads `SPLIT_TABLES_LARGER_THAN` and `OUTPUT_PLUGIN` from the same `~/.env` as `run-migration.sh`. pgcopydb requires catalog consistency — do not change either value between the original run and the resume.
+**Important:** The script reads `SPLIT_TABLES_LARGER_THAN`, `OUTPUT_PLUGIN` and `PUBLICATION_NAME` from the same `~/.env` as `run-migration.sh`. pgcopydb requires catalog consistency — do not change any of them between the original run and the resume. pgcopydb records the publication name in the slot file but never compares it, so a changed name fails silently by streaming from a different set of tables.
 
 **When to use:** After pgcopydb crashes, the instance reboots, or the migration is interrupted. To start completely over instead, run `~/target-clean.sh` + `~/drop-replication-slots.sh` first, then `~/start-migration-screen.sh`.
 
@@ -579,6 +583,7 @@ Every tunable is set once in `~/.env` and picked up by every script that uses it
 | `INDEX_JOBS` | 6 | `--index-jobs` | run-migration.sh, resume-migration.sh |
 | `SPLIT_TABLES_LARGER_THAN` | 50GB | `--split-tables-larger-than` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
 | `OUTPUT_PLUGIN` | pgoutput | `--plugin` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
+| `PUBLICATION_NAME` | `migration_pub` | `--publication` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
 | `FILTER_FILE` | `~/filters.ini` | `--filter` | run-migration.sh, resume-migration.sh, resume-cdc.sh, preflight-check.sh, verify-migration.sh |
 | `SLACK_WEBHOOK_URL` | unset | — | slack-migration-alerts.sh |
 

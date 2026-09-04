@@ -38,6 +38,9 @@ export SPLIT_TABLES_LARGER_THAN=50GB
 # server needs no extension. Use wal2json only if the migration needs it.
 export OUTPUT_PLUGIN=pgoutput
 
+# Publication the pgoutput plugin streams from, passed as --publication.
+export PUBLICATION_NAME=migration_pub
+
 # ── Filters ───────────────────────────────────────────────────────────────────
 
 # Path to the pgcopydb filter file. See filters.ini for the syntax.

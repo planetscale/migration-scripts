@@ -29,6 +29,12 @@ if [ -z "${PGCOPYDB_SOURCE_PGURI:-}" ] || [ -z "${PGCOPYDB_TARGET_PGURI:-}" ]; t
     echo "ERROR: PGCOPYDB_SOURCE_PGURI and PGCOPYDB_TARGET_PGURI must be set in ~/.env"
     exit 1
 fi
+
+if [ -z "${PUBLICATION_NAME:-}" ]; then
+    echo "ERROR: PUBLICATION_NAME must be set in ~/.env"
+    echo "  Add: export PUBLICATION_NAME=migration_pub"
+    exit 1
+fi
 # --- loaded ---
 
 # --- Locate pgcopydb: prefer PATH, else highest-versioned PG install ---
@@ -67,6 +73,7 @@ INDEX_JOBS="${INDEX_JOBS:-6}"
 SPLIT_TABLES_LARGER_THAN="${SPLIT_TABLES_LARGER_THAN:-50GB}"
 OUTPUT_PLUGIN="${OUTPUT_PLUGIN:-pgoutput}"
 
+
 cd "$MIGRATION_DIR"
 # Core dumps help debug rare native crashes; not required for a successful migrate.
 # SSM sessions often cannot raise the core ulimit — do not abort if this fails.
@@ -86,12 +93,14 @@ cp "$MIGRATION_DIR/schema/source.db" "$MIGRATION_DIR/schema/source.db.bak.$(date
     echo "Resuming clone --follow at $(date)"
     echo "Migration dir: $MIGRATION_DIR"
     echo "Plugin: $OUTPUT_PLUGIN | table-jobs: $TABLE_JOBS | index-jobs: $INDEX_JOBS"
+    echo "Publication: $PUBLICATION_NAME"
     echo "Split tables larger than: $SPLIT_TABLES_LARGER_THAN | filter: $FILTER_FILE"
     echo "=========================================="
 
     "$PGCOPYDB_BIN" clone \
         --follow \
         --plugin "$OUTPUT_PLUGIN" \
+        --publication "$PUBLICATION_NAME" \
         --resume \
         --not-consistent \
         --verbose \

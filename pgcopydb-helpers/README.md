@@ -31,6 +31,51 @@ Repeat the `GRANT USAGE`, `GRANT SELECT`, and `ALTER DEFAULT PRIVILEGES` stateme
 
 **`wal_sender_timeout`:** Setting this to `0` on the source prevents the replication slot from being dropped during long COPY phases. The initial data copy can take hours on large databases, and the default timeout (60s) may cause PostgreSQL to drop the idle replication connection before CDC streaming begins.
 
+**`pgoutput` publication (CDC only):** with the default `OUTPUT_PLUGIN=pgoutput`, the source only streams changes for tables that belong to a publication. Left to itself pgcopydb runs `CREATE PUBLICATION ... FOR TABLE`, which needs `CREATE` on the database **and ownership of every published table** — privileges a read-only `migration_user` does not have and hosted platforms rarely grant. Create the publication once as your platform's admin role instead and point the scripts at it; `migration_user` needs no additional grants.
+
+As the admin role, generate the statement from the catalog. This reproduces the list pgcopydb would build, so **apply the same exclusions as your `~/filters.ini`** — a table in the publication but outside the migration still has its `UPDATE`/`DELETE` blocked, and a migrated table missing from the publication has its changes silently dropped:
+
+```sql
+SELECT format('CREATE PUBLICATION migration_pub FOR TABLE %s;',
+              string_agg(format('%I.%I', n.nspname, c.relname), ', '
+                         ORDER BY n.nspname, c.relname))
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p')
+  AND c.relpersistence = 'p'
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pgcopydb')
+  AND n.nspname NOT LIKE 'pg_toast%'
+  AND n.nspname NOT LIKE 'pg_temp%';
+  -- mirror ~/filters.ini, e.g.: AND n.nspname NOT IN ('auth', 'storage', 'realtime')
+```
+
+Run the statement it returns. If it fails with `must be owner of table ...`, the admin role does not own some of those tables. Find the owning roles, grant the admin role membership in them, and retry:
+
+```sql
+-- Roles owning tables the current role cannot publish
+SELECT DISTINCT r.rolname AS owner_role
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_roles r ON r.oid = c.relowner
+WHERE c.relkind IN ('r', 'p')
+  AND c.relpersistence = 'p'
+  AND n.nspname NOT LIKE 'pg_%'
+  AND n.nspname != 'information_schema'
+  AND NOT pg_has_role(current_user, c.relowner, 'USAGE');
+```
+
+```sql
+GRANT <owner_role> TO CURRENT_USER;
+```
+
+`migration_pub` is the default name in `env`, and `run-migration.sh`, `resume-migration.sh` and `resume-cdc.sh` pass it as `--publication`.
+If the publication does not exist when the migration starts, pgcopydb stops immediately with a message naming both options:
+
+```
+ERROR  Publication "migration_pub" does not exist on the source database
+INFO   Create the publication first, or omit --publication to let pgcopydb create and drop one
+```
+
 **`fix-replica-identity.sh` permissions:** The script runs `ALTER TABLE ... REPLICA IDENTITY FULL` on the source, which requires table ownership — `SELECT` alone is not sufficient. Grant `migration_user` membership in the role(s) that own the tables so it inherits ownership privileges. First, find which owner roles are involved:
 
 ```sql
