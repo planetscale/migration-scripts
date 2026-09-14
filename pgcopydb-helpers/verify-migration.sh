@@ -70,7 +70,7 @@ set -u
 # (--exact-count-timeout), and a short lock_timeout could turn a transient lock on
 # a busy source into a false verification failure. Exported so every psql call
 # inherits it.
-export PGOPTIONS='-c default_transaction_read_only=on'
+export PGOPTIONS='-c default_transaction_read_only=on -c search_path=pg_catalog'
 
 if [[ -z "${PGCOPYDB_SOURCE_PGURI:-}" || -z "${PGCOPYDB_TARGET_PGURI:-}" ]]; then
     echo "ERROR: PGCOPYDB_SOURCE_PGURI and PGCOPYDB_TARGET_PGURI must be set in ~/.env"
@@ -173,6 +173,49 @@ exact_count() {
 # Count non-empty lines in a variable
 # grep -c exits 1 on zero matches (but still prints "0"), so || true is enough
 line_count() { printf '%s' "${1:-}" | grep -c . || true; }
+
+# ── Column-default comparison ─────────────────────────────────────────────────
+# Strip the payload, leaving one identity per line.  def_keys <marker> <lines>
+def_keys() {
+    local marker="$1"
+    # Split at the FIRST marker: a default may contain the marker text itself.
+    printf '%s' "${2:-}" | awk -v m="$marker" '
+        { i = index($0, m); print (i ? substr($0, 1, i - 1) : $0) }
+    ' | sort -u
+}
+
+# Partition an exact-diff result by whether the identity is also absent from the
+# target.  split_missing <absent|differing> <missing-lines> <marker> <missing-keys>
+split_missing() {
+    local mode="$1" missing="${2:-}" marker="$3" keys="${4:-}" line key
+    [[ -z "$missing" ]] && return 0
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        key=$(printf '%s' "$line" | awk -v m="$marker" '
+            { i = index($0, m); print (i ? substr($0, 1, i - 1) : $0) }')
+        if printf '%s\n' "$keys" | grep -Fxq -- "$key"; then
+            [[ "$mode" == absent ]] && printf '%s\n' "$line"
+        else
+            [[ "$mode" == differing ]] && printf '%s\n' "$line"
+        fi
+    done <<< "$missing"
+    return 0
+}
+
+# Print the target's version of each differing object, beside the source's.
+#   report_differing <marker> <differing-lines> <target-lines>
+report_differing() {
+    local marker="$1" differing="${2:-}" target="${3:-}" line key tgt
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        key=$(printf '%s' "$line" | awk -v m="$marker" '
+            { i = index($0, m); print (i ? substr($0, 1, i - 1) : $0) }')
+        tgt=$(printf '%s\n' "$target" | grep -F -- "${key}${marker}" | head -1)
+        printf "       %s\n" "$key"
+        printf "         source: %s\n" "${line#*"$marker"}"
+        printf "         target: %s\n" "${tgt#*"$marker"}"
+    done <<< "$differing"
+}
 
 # Absolute value
 abs() { local v=$1; echo "${v#-}"; }
@@ -347,18 +390,28 @@ SRC_COLS=$(q "$SOURCE_CONN" "$COL_QUERY")
 TGT_COLS=$(q "$TARGET_CONN" "$COL_QUERY")
 
 MISSING_COLS=$(comm -23 <(echo "$SRC_COLS" | sort) <(echo "$TGT_COLS" | sort) 2>/dev/null || true)
-EXTRA_COLS=$(comm   -13 <(echo "$SRC_COLS" | sort) <(echo "$TGT_COLS" | sort) 2>/dev/null || true)
 
-if [[ -z "$MISSING_COLS" ]]; then
+# Identity carries type= and nullable=, so only default= drift is downgraded.
+MISSING_COL_KEYS=$(comm -23 <(def_keys '  default=' "$SRC_COLS") <(def_keys '  default=' "$TGT_COLS") 2>/dev/null || true)
+ABSENT_COLS=$(split_missing absent    "$MISSING_COLS" '  default=' "$MISSING_COL_KEYS")
+DIFFERING_COLS=$(split_missing differing "$MISSING_COLS" '  default=' "$MISSING_COL_KEYS")
+EXTRA_COLS=$(comm -13 <(def_keys '  default=' "$SRC_COLS") <(def_keys '  default=' "$TGT_COLS") 2>/dev/null || true)
+
+if [[ -z "$ABSENT_COLS" ]]; then
     log_pass "All column definitions match"
 else
-    log_fail "Column definitions in source missing/changed in target ($(line_count "$MISSING_COLS")):"
-    echo "$MISSING_COLS" | head -30 | while IFS= read -r c; do printf "       %s\n" "$c"; done
-    [[ $(line_count "$MISSING_COLS") -gt 30 ]] && echo "       ... (truncated)"
+    log_fail "Column definitions in source missing/changed in target ($(line_count "$ABSENT_COLS")):"
+    echo "$ABSENT_COLS" | head -30 | while IFS= read -r c; do printf "       %s\n" "$c"; done
+    [[ $(line_count "$ABSENT_COLS") -gt 30 ]] && echo "       ... (truncated)"
 fi
 
+[[ -n "$DIFFERING_COLS" ]] && {
+    log_warn "Column defaults differ in text for $(line_count "$DIFFERING_COLS") column(s) present in both — review below"
+    report_differing '  default=' "$DIFFERING_COLS" "$TGT_COLS" | head -30
+}
+
 [[ -n "$EXTRA_COLS" ]] && {
-    log_warn "Extra column definitions in target (not in source) — $(line_count "$EXTRA_COLS") diff(s)"
+    log_warn "Extra columns in target (not in source) — $(line_count "$EXTRA_COLS")"
     echo "$EXTRA_COLS" | head -10 | while IFS= read -r c; do printf "       %s\n" "$c"; done
 }
 
@@ -368,12 +421,21 @@ fi
 log_section "4/11  INDEXES"
 
 IDX_QUERY="
-    SELECT schemaname || '.' || tablename || '  idx=' || indexname
-        || '  def=' || indexdef
-    FROM pg_indexes
-    WHERE true
-    AND schemaname NOT IN ('pg_catalog','information_schema','pg_toast')
-    $(schema_clause "schemaname") $(table_clause "schemaname" "tablename")
+    SELECT n.nspname || '.' || t.relname || '  idx=' || i.relname
+        || '  unique='  || ix.indisunique::text
+        || '  valid='   || (ix.indisvalid AND ix.indisready)::text
+        || '  primary=' || ix.indisprimary::text
+        || '  method='  || am.amname
+        || '  ncols='   || ix.indnatts::text
+        || '  partial=' || (ix.indpred IS NOT NULL)::text
+        || '  expr='    || (ix.indexprs IS NOT NULL)::text
+    FROM pg_index ix
+    JOIN pg_class i      ON i.oid = ix.indexrelid
+    JOIN pg_class t      ON t.oid = ix.indrelid
+    JOIN pg_namespace n  ON n.oid = t.relnamespace
+    JOIN pg_am am        ON am.oid = i.relam
+    WHERE true $SCHEMA_SQL_FILTER
+    $(schema_clause "n.nspname") $(table_clause "n.nspname" "t.relname")
     ORDER BY 1"
 
 SRC_IDX=$(q "$SOURCE_CONN" "$IDX_QUERY")
@@ -385,9 +447,18 @@ EXTRA_IDX=$(comm   -13 <(echo "$SRC_IDX" | sort) <(echo "$TGT_IDX" | sort) 2>/de
 if [[ -z "$MISSING_IDX" ]]; then
     log_pass "All indexes present in target"
 else
-    log_fail "Indexes in source but MISSING in target ($(line_count "$MISSING_IDX")):"
+    log_fail "Indexes in source but MISSING/CHANGED in target ($(line_count "$MISSING_IDX")):"
     echo "$MISSING_IDX" | head -20 | while IFS= read -r i; do printf "       %s\n" "$i"; done
 fi
+
+# An invalid index exists under the right name but indexes and enforces nothing
+# until it is rebuilt, so it gets its own line rather than a generic mismatch.
+INVALID_IDX=$(printf '%s\n' "$TGT_IDX" | grep -F '  valid=false' || true)
+[[ -n "$INVALID_IDX" ]] && {
+    log_fail "INVALID indexes in target ($(line_count "$INVALID_IDX")) — build failed; these enforce nothing:"
+    echo "$INVALID_IDX" | head -20 | while IFS= read -r i; do printf "       %s\n" "$i"; done
+}
+
 [[ -n "$EXTRA_IDX" ]] && log_warn "Extra indexes in target: $(line_count "$EXTRA_IDX")"
 
 # =============================================================================
@@ -395,14 +466,23 @@ fi
 # =============================================================================
 log_section "5/11  CONSTRAINTS  (PK / FK / UNIQUE / CHECK)"
 
+# ref= joins pg_class rather than casting confrelid::regclass, whose output is
+# schema-qualified or not depending on the session search_path.
 CON_QUERY="
     SELECT n.nspname || '.' || t.relname || '  con=' || c.conname
-        || '  type=' || c.contype::text
-        || '  def=' || pg_get_constraintdef(c.oid, true)
+        || '  type='  || c.contype::text
+        || '  valid=' || c.convalidated::text
+        || '  ncols=' || COALESCE(cardinality(c.conkey), 0)::text
+        || '  ondel=' || COALESCE(NULLIF(BTRIM(c.confdeltype::text), ''), '-')
+        || '  onupd=' || COALESCE(NULLIF(BTRIM(c.confupdtype::text), ''), '-')
+        || '  ref='   || COALESCE(rn.nspname || '.' || r.relname, '-')
     FROM pg_constraint c
     JOIN pg_class t     ON t.oid = c.conrelid
     JOIN pg_namespace n ON n.oid = t.relnamespace
+    LEFT JOIN pg_class r      ON r.oid = c.confrelid
+    LEFT JOIN pg_namespace rn ON rn.oid = r.relnamespace
     WHERE true $SCHEMA_SQL_FILTER
+    AND c.contype <> 'n'
     $(schema_clause "n.nspname") $(table_clause "n.nspname" "t.relname")
     ORDER BY 1"
 
@@ -410,12 +490,23 @@ SRC_CON=$(q "$SOURCE_CONN" "$CON_QUERY")
 TGT_CON=$(q "$TARGET_CONN" "$CON_QUERY")
 
 MISSING_CON=$(comm -23 <(echo "$SRC_CON" | sort) <(echo "$TGT_CON" | sort) 2>/dev/null || true)
+EXTRA_CON=$(comm   -13 <(echo "$SRC_CON" | sort) <(echo "$TGT_CON" | sort) 2>/dev/null || true)
+
 if [[ -z "$MISSING_CON" ]]; then
     log_pass "All constraints present and matching in target"
 else
     log_fail "Constraints in source but MISSING/CHANGED in target ($(line_count "$MISSING_CON")):"
     echo "$MISSING_CON" | head -20 | while IFS= read -r c; do printf "       %s\n" "$c"; done
 fi
+
+# NOT VALID constraints exist but are not enforced against existing rows.
+NOTVALID_CON=$(printf '%s\n' "$TGT_CON" | grep -F '  valid=false' || true)
+[[ -n "$NOTVALID_CON" ]] && {
+    log_fail "NOT VALID constraints in target ($(line_count "$NOTVALID_CON")) — not enforced for existing rows:"
+    echo "$NOTVALID_CON" | head -20 | while IFS= read -r c; do printf "       %s\n" "$c"; done
+}
+
+[[ -n "$EXTRA_CON" ]] && log_warn "Extra constraints in target: $(line_count "$EXTRA_CON")"
 
 # =============================================================================
 # 6. VIEWS
