@@ -6,7 +6,7 @@ Use these scripts to migrate a Postgres database to PlanetScale for Postgres or 
 
 The primary and most actively developed migration path. Uses [pgcopydb](https://github.com/planetscale/pgcopydb) (PlanetScale fork) for fast, reliable PostgreSQL-to-PlanetScale migrations with CDC-based replication. Includes a set of helper scripts that run on a dedicated migration instance.
 
-Pair with the [pgcopydb instance templates](./pgcopydb-templates) to provision a pre-configured EC2 or GCP Compute Engine instance via Terraform or CloudFormation.
+Pair with the [pgcopydb instance templates](./pgcopydb-templates) to provision a pre-configured EC2, GCP Compute Engine, or Azure VM instance via Terraform or CloudFormation.
 
 ## [Postgres directly to PlanetScale for Postgres](./postgres-direct)
 
