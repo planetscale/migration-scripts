@@ -34,6 +34,12 @@ never pay for IOPS the VM cannot reach and the disk is never throttled:
 `data_disk_size_gb` sets capacity only — `500`, `1000` (default), or `3000` GB. Larger VM sizes are not offered because a single Premium
 SSD v2 disk tops out at 80,000 IOPS / 2,000 MB/s, which `Standard_E16bds_v5` already saturates.
 
+Migration data lands on a separate data disk rather than the OS disk, because Premium SSD v2 cannot
+be an OS disk and Premium SSD v1 caps at 20,000 IOPS. `custom-data.sh` mounts that disk at
+`/home/ubuntu`, which is where the helper scripts create their `~/migration_YYYYMMDD-HHMMSS`
+working directories. Azure attaches data disks after the VM boots, so the script waits for the
+device to appear and falls back to the OS disk if it never does.
+
 ## How to Deploy
 
 ### Prerequisites
@@ -66,6 +72,9 @@ SSD v2 disk tops out at 80,000 IOPS / 2,000 MB/s, which `Standard_E16bds_v5` alr
    ssh -i ./migration_key ubuntu@$(terraform output -raw public_ip)
    ```
    With your own `ssh_public_key`: `ssh ubuntu@$(terraform output -raw public_ip)`.
+
+   Delete `./migration_key` once the migration is done. The key also lives in
+   `terraform.tfstate`, so do not share that file.
 
    Entra ID (`az ssh vm ...`, or the portal's **Connect**) needs no key but logs
    you in as yourself, not `ubuntu` — add `sudo su - ubuntu`.

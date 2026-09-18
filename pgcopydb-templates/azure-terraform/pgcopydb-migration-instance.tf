@@ -150,11 +150,6 @@ variable "install_azure_monitor_agent" {
 # =============================================================================
 
 locals {
-  # Provisioned disk performance tracks the VM's NVMe uncached ceiling, so the
-  # disk is never throttled by the VM and never billed for IOPS the VM cannot
-  # reach. A single Premium SSD v2 tops out at 80,000 IOPS / 2,000 MB/s, which
-  # E16bds_v5 already saturates — larger sizes buy nothing for one disk, so
-  # var.vm_size validation rejects them.
   vm_disk_performance = {
     "Standard_E4bds_v5"  = { iops = 21000, mbps = 600 }  # VM ceiling 21,400 / 600
     "Standard_E8bds_v5"  = { iops = 44000, mbps = 1200 } # VM ceiling 44,200 / 1,200
@@ -163,8 +158,6 @@ locals {
 
   disk_performance = local.vm_disk_performance[var.vm_size]
 
-  # Azure requires an admin SSH key whenever password auth is disabled, so fall
-  # back to the generated throwaway key when the caller supplies none.
   admin_ssh_public_key = coalesce(var.ssh_public_key, one(tls_private_key.migration[*].public_key_openssh))
 
   tags = {
@@ -177,7 +170,6 @@ locals {
 # Data Sources - Existing Network
 # =============================================================================
 
-# Read-only: nothing in your virtual network is modified.
 data "azurerm_subnet" "migration" {
   name                 = var.subnet_name
   virtual_network_name = var.vnet_name
@@ -190,8 +182,6 @@ data "azurerm_client_config" "current" {}
 # Resource Group
 # =============================================================================
 
-# Everything this template creates lives here, so `terraform destroy` removes
-# exactly these resources and never touches your existing infrastructure.
 resource "azurerm_resource_group" "migration" {
   name     = "${var.resource_prefix}-rg"
   location = var.location
@@ -260,8 +250,6 @@ resource "azurerm_network_security_rule" "outbound" {
 # Public IP + NIC
 # =============================================================================
 
-# A public IP is what gives the VM outbound internet access: VMs created after
-# 2025-09-30 get no default outbound access.
 resource "azurerm_public_ip" "migration" {
   name                = "${var.resource_prefix}-pip"
   location            = azurerm_resource_group.migration.location
@@ -289,8 +277,6 @@ resource "azurerm_network_interface" "migration" {
   tags = local.tags
 }
 
-# Associated with the NIC, not the subnet: a subnet-level association would
-# replace any NSG you already have there and affect every other VM in it.
 resource "azurerm_network_interface_security_group_association" "migration" {
   network_interface_id      = azurerm_network_interface.migration.id
   network_security_group_id = azurerm_network_security_group.migration.id
@@ -300,8 +286,6 @@ resource "azurerm_network_interface_security_group_association" "migration" {
 # SSH Key
 # =============================================================================
 
-# Only created when var.ssh_public_key is unset. RSA rather than ED25519:
-# Azure VM provisioning accepts SSH-2 RSA keys only.
 resource "tls_private_key" "migration" {
   count = var.ssh_public_key == null ? 1 : 0
 
@@ -327,8 +311,6 @@ resource "azurerm_linux_virtual_machine" "migration" {
 
   network_interface_ids = [azurerm_network_interface.migration.id]
 
-  # NVMe raises the uncached disk ceiling by ~36% at the same price — an
-  # E8bds_v5 does 44,200 IOPS on NVMe versus 32,400 on SCSI.
   disk_controller_type = "NVMe"
 
   identity {
@@ -346,7 +328,6 @@ resource "azurerm_linux_virtual_machine" "migration" {
     disk_size_gb         = var.os_disk_size_gb
   }
 
-  # Gen2 and tagged for NVMe support.
   source_image_reference {
     publisher = "Canonical"
     offer     = "ubuntu-24_04-lts"
@@ -363,9 +344,6 @@ resource "azurerm_linux_virtual_machine" "migration" {
 # Data Disk
 # =============================================================================
 
-# Premium SSD v2 cannot be an OS disk, so migration working data lives here.
-# custom-data.sh mounts it at /home/ubuntu, which is where the helper scripts
-# create their ~/migration_YYYYMMDD-HHMMSS directories.
 resource "azurerm_managed_disk" "migration_data" {
   name                 = "${var.resource_prefix}-data-disk"
   location             = azurerm_resource_group.migration.location
@@ -394,7 +372,6 @@ resource "azurerm_virtual_machine_data_disk_attachment" "migration_data" {
 # VM Extensions + Role Assignment
 # =============================================================================
 
-# Enables keyless SSH with `az ssh vm` using your Entra ID identity.
 resource "azurerm_virtual_machine_extension" "aad_ssh_login" {
   name                       = "AADSSHLoginForLinux"
   virtual_machine_id         = azurerm_linux_virtual_machine.migration.id

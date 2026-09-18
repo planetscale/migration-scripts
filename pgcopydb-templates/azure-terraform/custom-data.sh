@@ -15,11 +15,6 @@ echo "=========================================="
 
 export DEBIAN_FRONTEND=noninteractive
 
-# VM extensions (AADSSHLoginForLinux, AzureMonitorLinuxAgent) install their own
-# packages in parallel with this script, and whichever loses the dpkg lock
-# normally fails outright. Setting the timeout globally makes every apt caller
-# on the box — ours, the Azure CLI installer's, and the extensions' — wait
-# instead. Written first so it is in place before the first install.
 cat > /etc/apt/apt.conf.d/99-dpkg-lock-timeout << 'APT_EOF'
 DPkg::Lock::Timeout "-1";
 APT_EOF
@@ -34,14 +29,6 @@ apt-get install -y wget gnupg2 lsb-release curl unzip ca-certificates netcat-ope
 # =============================================================================
 # Mount Migration Data Disk
 # =============================================================================
-# The Premium SSD v2 data disk is attached after the VM boots, so wait for the
-# device instead of assuming it is present. by-lun is the NVMe symlink path
-# (azure-vm-utils udev rules); scsi1 is probed as a fallback in case the VM is
-# ever moved back to the SCSI controller.
-#
-# /home/ubuntu is relocated onto the disk because the helper scripts create
-# their working directories as ~/migration_YYYYMMDD-HHMMSS — see
-# run-migration.sh in pgcopydb-helpers.
 echo "Waiting for migration data disk..."
 DATA_DISK=""
 for _ in $(seq 1 60); do
@@ -60,7 +47,6 @@ if [ -n "$DATA_DISK" ]; then
     DATA_UUID=$(blkid -s UUID -o value "$DATA_DISK")
     mkdir -p /mnt/migration-data
     mount "$DATA_DISK" /mnt/migration-data
-    # Carries over .ssh, so Entra ID and key-based SSH keep working post-mount.
     rsync -aXS /home/ubuntu/ /mnt/migration-data/
     umount /mnt/migration-data
     rmdir /mnt/migration-data
@@ -151,8 +137,6 @@ alias pgcopydb-version='pgcopydb --version'
 alias psql-version='psql --version'
 alias check-planetscale='nc -zv app.connect.psdb.cloud 443 2>&1 | grep succeeded'
 
-# Entra ID SSH logs in as your own account, which cannot read /home/ubuntu.
-# Only print for interactive shells so scp and remote commands stay clean.
 case $- in
     *i*)
         if [ "$(id -un)" != "ubuntu" ]; then
