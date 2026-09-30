@@ -4,7 +4,7 @@ Cross-account IAM role that PlanetScale assumes in the customer AWS account for 
 
 This is **not** the [pgcopydb instance](../pgcopydb-templates/) EC2 role (CloudWatch Agent + SSM). Do not put these `pi:` actions on the instance role.
 
-CloudFormation and Terraform here are the static publish of Liftoff’s IAM generators (`planetscaleIamRole.js` / `planetscaleIamRoleTerraform.js`), including the Database Insights read-only `pi:` actions from [liftoff-migration-reviewer#355](https://github.com/planetscale/liftoff-migration-reviewer/pull/355).
+CloudFormation and Terraform here are the static publish of Liftoff's IAM generators (`planetscaleIamRole.js` / `planetscaleIamRoleTerraform.js`), including the Database Insights read-only `pi:` actions from [liftoff-migration-reviewer#355](https://github.com/planetscale/liftoff-migration-reviewer/pull/355).
 
 ## Parameters
 
