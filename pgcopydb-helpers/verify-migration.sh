@@ -20,7 +20,8 @@
 #   --exact-count-tables <n>      Random tables to exact-count (default: 10, 0=skip)
 #   --exact-count-max-gb <n>      Max table size in GB for exact count (default: 10)
 #   --exact-count-timeout <s>     Per-table COUNT(*) timeout in seconds (default: 120)
-#   --filters <path>              Path to filters.ini (default: ~/filters.ini). Required —
+#   --filters <path>              Path to filters.ini (default: FILTER_FILE from ~/.env,
+#                                 or ~/filters.ini). Required —
 #                                 verify scopes to the same object set the migration used.
 #
 # Exit codes:
@@ -55,7 +56,9 @@ trap 'rm -f "$ERRFILE"' EXIT
 
 # ── Load connection strings from ~/.env ───────────────────────────────────────
 if [[ ! -f ~/.env ]]; then
-    echo "ERROR: ~/.env not found. Create it with PGCOPYDB_SOURCE_PGURI and PGCOPYDB_TARGET_PGURI." >&2
+    echo "ERROR: ~/.env not found. Create it from the template:" >&2
+    echo "  cp ~/env-template ~/.env && chmod 600 ~/.env" >&2
+    echo "Then set PGCOPYDB_SOURCE_PGURI and PGCOPYDB_TARGET_PGURI in ~/.env." >&2
     exit 1
 fi
 set +u
@@ -94,7 +97,9 @@ NO_SPOT_CHECK=false
 EXACT_COUNT_N=10       # number of random tables to exact-count
 EXACT_COUNT_MAX_GB=10  # tables larger than this are skipped
 EXACT_COUNT_TIMEOUT=120
-FILTERS_FILE=~/filters.ini  # scope checks to objects this filter migrates
+# Scope checks to objects this filter migrates. FILTER_FILE comes from ~/.env
+# (see env-template); --filters overrides it.
+FILTERS_FILE="${FILTER_FILE:-$HOME/filters.ini}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 usage() {
