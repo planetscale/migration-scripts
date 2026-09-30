@@ -2,6 +2,10 @@
 
 Use these scripts to migrate a Postgres database to PlanetScale for Postgres or Vitess/MySQL.
 
+## [Customer PlanetScale migration IAM role (AWS)](./iam-role)
+
+Cross-account IAM role customers deploy so PlanetScale can assume access for a migration POC. CloudFormation and Terraform. This is **not** the pgcopydb EC2 instance role (CloudWatchAgent + SSM) in [pgcopydb-templates](./pgcopydb-templates).
+
 ## [Postgres to PlanetScale via pgcopydb](./pgcopydb-helpers)
 
 The primary and most actively developed migration path. Uses [pgcopydb](https://github.com/planetscale/pgcopydb) (PlanetScale fork) for fast, reliable PostgreSQL-to-PlanetScale migrations with CDC-based replication. Includes a set of helper scripts that run on a dedicated migration instance.
