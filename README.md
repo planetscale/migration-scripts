@@ -8,6 +8,10 @@ The primary and most actively developed migration path. Uses [pgcopydb](https://
 
 Pair with the [pgcopydb instance templates](./pgcopydb-templates) to provision a pre-configured EC2, GCP Compute Engine, or Azure VM instance via Terraform or CloudFormation.
 
+## [Customer AWS IAM role for PlanetScale migrations](./iam-role)
+
+Cross-account IAM role (CloudFormation and Terraform) that PlanetScale assumes in the customer AWS account for snapshot restore, migration infrastructure, and read-only RDS monitoring (Enhanced Monitoring, Performance Insights, and Database Insights). This is the customer access role, not the pgcopydb EC2 instance role in [pgcopydb-templates](./pgcopydb-templates).
+
 ## [Postgres directly to PlanetScale for Postgres](./postgres-direct)
 
 This direct migration uses logical replication and, optionally, a proxy which can manage connections and sequences for a zero-downtime migration.
