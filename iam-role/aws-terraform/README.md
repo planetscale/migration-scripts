@@ -31,6 +31,7 @@ All actions are restricted to resources named with your chosen prefix (default: 
 ## What PlanetScale CANNOT Do
 
 - Access or modify your existing databases, EC2 instances, or other resources
+- Modify the PlanetScale migration role itself, or attach IAM policies other than `AmazonSSMManagedInstanceCore` and `CloudWatchAgentServerPolicy` on `${prefix}-ec2-*` helper roles
 - Create resources outside the naming prefix
 - Modify your VPCs, subnets, or network configuration
 - Access any S3 buckets not created by PlanetScale
@@ -48,7 +49,7 @@ All actions are restricted to resources named with your chosen prefix (default: 
 
 1. **Create a `terraform.tfvars` file** with your values:
    ```hcl
-   planetscale_account_id = "PLANETSCALE-ACCOUNT-ID"  # Provided by PlanetScale
+   planetscale_account_id = "PLANETSCALE-ACCOUNT-ID"  # Required; provided by PlanetScale (no default)
    external_id            = "YOUR-GENERATED-SECRET"    # Generate with: uuidgen
    resource_prefix        = "planetscale-migration"    # Or customize
    region                 = "us-east-1"                # Your AWS region

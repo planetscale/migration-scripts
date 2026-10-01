@@ -28,9 +28,8 @@ terraform {
 # ==============================================================================
 
 variable "planetscale_account_id" {
-  description = "PlanetScale AWS account ID (provided by PlanetScale support team)"
+  description = "Required. PlanetScale AWS account ID (provided by PlanetScale support team)"
   type        = string
-  default     = "123456789012"
 
   validation {
     condition     = can(regex("^\\d{12}$", var.planetscale_account_id))
@@ -380,7 +379,9 @@ resource "aws_iam_role_policy" "planetscale_migration" {
         Resource = "*"
       },
 
-      # IAM role and policy management (for EC2 instance roles)
+      # IAM role management for EC2 helper roles only (${var.resource_prefix}-ec2-*).
+      # Does not match the migration role (${var.resource_prefix}-role).
+      # No PutRolePolicy: that would allow an inline admin policy on a helper role.
       {
         Sid    = "IAMRoleManagementForEC2"
         Effect = "Allow"
@@ -388,19 +389,34 @@ resource "aws_iam_role_policy" "planetscale_migration" {
           "iam:CreateRole",
           "iam:DeleteRole",
           "iam:GetRole",
-          "iam:PutRolePolicy",
-          "iam:DeleteRolePolicy",
           "iam:GetRolePolicy",
-          "iam:AttachRolePolicy",
-          "iam:DetachRolePolicy",
           "iam:ListAttachedRolePolicies",
           "iam:ListRolePolicies",
           "iam:TagRole"
         ]
-        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-*"
+        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-ec2-*"
       },
 
-      # IAM instance profile management (for EC2 instances)
+      # Attach/detach only the managed policies used by pgcopydb EC2 helpers
+      {
+        Sid    = "IAMRolePolicyAttachmentForEC2"
+        Effect = "Allow"
+        Action = [
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy"
+        ]
+        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-ec2-*"
+        Condition = {
+          ArnEquals = {
+            "iam:PolicyARN" = [
+              "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+              "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+            ]
+          }
+        }
+      },
+
+      # IAM instance profile management (for EC2 helper instance profiles)
       {
         Sid    = "IAMInstanceProfileManagement"
         Effect = "Allow"
@@ -412,15 +428,15 @@ resource "aws_iam_role_policy" "planetscale_migration" {
           "iam:RemoveRoleFromInstanceProfile",
           "iam:ListInstanceProfiles"
         ]
-        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/${var.resource_prefix}-*"
+        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/${var.resource_prefix}-ec2-*"
       },
 
-      # IAM PassRole for EC2 instances
+      # IAM PassRole for EC2 helper roles only (not the migration role)
       {
         Sid    = "IAMPassRoleForEC2"
         Effect = "Allow"
         Action = ["iam:PassRole"]
-        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-*"
+        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-ec2-*"
         Condition = {
           StringEquals = {
             "iam:PassedToService" = "ec2.amazonaws.com"

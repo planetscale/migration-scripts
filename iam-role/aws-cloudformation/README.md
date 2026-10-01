@@ -31,6 +31,7 @@ All actions are restricted to resources named with your chosen prefix (default: 
 ## What PlanetScale CANNOT Do
 
 - Access or modify your existing databases, EC2 instances, or other resources
+- Modify the PlanetScale migration role itself, or attach IAM policies other than `AmazonSSMManagedInstanceCore` and `CloudWatchAgentServerPolicy` on `${prefix}-ec2-*` helper roles
 - Create resources outside the naming prefix
 - Modify your VPCs, subnets, or network configuration
 - Access any S3 buckets not created by PlanetScale
@@ -53,7 +54,7 @@ All actions are restricted to resources named with your chosen prefix (default: 
    - Upload the `planetscale-iam-role.yaml` template
 
 3. **Fill in the parameters**
-   - **PlanetScale Account ID**: Provided by your PlanetScale contact
+   - **PlanetScale Account ID** (required, no default): Provided by your PlanetScale contact
    - **External ID**: Generate a unique secret (e.g., run `uuidgen` in your terminal)
    - **Resource Prefix**: Leave as default or customize (controls what PlanetScale can name resources)
 

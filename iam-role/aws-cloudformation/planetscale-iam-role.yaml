@@ -28,8 +28,7 @@ Metadata:
 Parameters:
   PlanetScaleAccountId:
     Type: String
-    Default: '123456789012'
-    Description: 'PlanetScale AWS account ID (provided by PlanetScale support team)'
+    Description: 'Required. PlanetScale AWS account ID (provided by PlanetScale support team)'
     AllowedPattern: '\d{12}'
     ConstraintDescription: 'Must be a valid 12-digit AWS account ID'
 
@@ -292,24 +291,35 @@ Resources:
               - 'ec2:ModifyVolume'
             Resource: '*'
 
-          # IAM role and policy management (for EC2 instance roles)
+          # IAM role management for EC2 helper roles only (${ResourcePrefix}-ec2-*).
+          # Does not match the migration role (${ResourcePrefix}-role).
+          # No PutRolePolicy: that would allow an inline admin policy on a helper role.
           - Sid: IAMRoleManagementForEC2
             Effect: Allow
             Action:
               - 'iam:CreateRole'
               - 'iam:DeleteRole'
               - 'iam:GetRole'
-              - 'iam:PutRolePolicy'
-              - 'iam:DeleteRolePolicy'
               - 'iam:GetRolePolicy'
-              - 'iam:AttachRolePolicy'
-              - 'iam:DetachRolePolicy'
               - 'iam:ListAttachedRolePolicies'
               - 'iam:ListRolePolicies'
               - 'iam:TagRole'
-            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ResourcePrefix}-*'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ResourcePrefix}-ec2-*'
 
-          # IAM instance profile management (for EC2 instances)
+          # Attach/detach only the managed policies used by pgcopydb EC2 helpers
+          - Sid: IAMRolePolicyAttachmentForEC2
+            Effect: Allow
+            Action:
+              - 'iam:AttachRolePolicy'
+              - 'iam:DetachRolePolicy'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ResourcePrefix}-ec2-*'
+            Condition:
+              ArnEquals:
+                'iam:PolicyARN':
+                  - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+                  - 'arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy'
+
+          # IAM instance profile management (for EC2 helper instance profiles)
           - Sid: IAMInstanceProfileManagement
             Effect: Allow
             Action:
@@ -319,14 +329,14 @@ Resources:
               - 'iam:AddRoleToInstanceProfile'
               - 'iam:RemoveRoleFromInstanceProfile'
               - 'iam:ListInstanceProfiles'
-            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/${ResourcePrefix}-*'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/${ResourcePrefix}-ec2-*'
 
-          # IAM PassRole for EC2 instances
+          # IAM PassRole for EC2 helper roles only (not the migration role)
           - Sid: IAMPassRoleForEC2
             Effect: Allow
             Action:
               - 'iam:PassRole'
-            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ResourcePrefix}-*'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ResourcePrefix}-ec2-*'
             Condition:
               StringEquals:
                 'iam:PassedToService': 'ec2.amazonaws.com'

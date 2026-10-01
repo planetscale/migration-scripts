@@ -8,9 +8,9 @@ The EC2 instance role lives in [pgcopydb-templates](../pgcopydb-templates) and o
 
 Both templates take:
 
-- **PlanetScale AWS account ID** — provided by PlanetScale support
+- **PlanetScale AWS account ID** — required. Provided by PlanetScale support. No default (a missing value fails deploy/plan).
 - **External ID** — customer-generated shared secret (`uuidgen` or `openssl rand -hex 32`). Required on `sts:AssumeRole`. Share it with PlanetScale; keep it confidential.
-- **Resource prefix** — defaults to `planetscale-migration`; write actions are scoped to names with this prefix
+- **Resource prefix** — defaults to `planetscale-migration`; write actions are scoped to names with this prefix. IAM CreateRole / AttachRolePolicy / PassRole for EC2 helpers is further limited to `${prefix}-ec2-*` (does not match the migration role `${prefix}-role`). AttachRolePolicy may only attach `AmazonSSMManagedInstanceCore` and `CloudWatchAgentServerPolicy`.
 
 After deploy, share the role ARN and External ID with PlanetScale.
 
