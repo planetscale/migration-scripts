@@ -55,7 +55,7 @@ apt-get install -y \
 # =============================================================================
 echo "Building pgcopydb from source..."
 cd /tmp
-git clone --branch v0.19.0 https://github.com/planetscale/pgcopydb.git
+git clone --branch v0.20.0 https://github.com/planetscale/pgcopydb.git
 cd pgcopydb
 export PATH=/usr/lib/postgresql/18/bin:$PATH
 make clean || true
@@ -111,20 +111,6 @@ alias pgcopydb-version='pgcopydb --version'
 alias psql-version='psql --version'
 alias check-planetscale='nc -zv app.connect.psdb.cloud 443 2>&1 | grep succeeded'
 PROFILE_EOF
-
-# .env file
-cat > /home/ubuntu/.env << 'ENV_EOF'
-# PlanetScale Migration Environment Variables
-# Edit these values before running the migration
-
-# Source Database
-PGCOPYDB_SOURCE_PGURI="postgresql://user:password@source-host:5432/dbname?sslmode=require"
-
-# Target Database (PlanetScale)
-PGCOPYDB_TARGET_PGURI="postgresql://user:password@target-host.connect.psdb.cloud:5432/dbname?sslmode=require"
-ENV_EOF
-chmod 600 /home/ubuntu/.env
-chown ubuntu:ubuntu /home/ubuntu/.env
 
 # =============================================================================
 # Pull PlanetScale Migration Helper Scripts

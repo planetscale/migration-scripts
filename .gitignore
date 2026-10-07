@@ -5,6 +5,11 @@ Thumbs.db
 # AI assistant config
 CLAUDE.md
 
+# SSH keys written by the Azure template's generated-key flow
+migration_key
+*_key
+*_key.pem
+
 # Environment and secrets
 .env
 *.env

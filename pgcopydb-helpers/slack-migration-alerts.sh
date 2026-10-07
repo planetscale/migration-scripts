@@ -55,6 +55,11 @@ while [ $# -gt 0 ]; do
 done
 
 # ── Load environment ───────────────────────────────────────────────
+if [ ! -f ~/.env ]; then
+    echo "ERROR: ~/.env not found. Create it from the template:" >&2
+    echo "  cp ~/env-template ~/.env && chmod 600 ~/.env" >&2
+    exit 1
+fi
  set +u
  set -a
  source ~/.env

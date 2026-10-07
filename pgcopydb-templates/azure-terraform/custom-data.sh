@@ -1,5 +1,5 @@
 #!/bin/bash
-# Startup script for pgcopydb migration instance
+# Custom-data script for pgcopydb migration instance
 # This script runs on first boot to install and configure pgcopydb
 
 set -e
@@ -15,12 +15,48 @@ echo "=========================================="
 
 export DEBIAN_FRONTEND=noninteractive
 
+cat > /etc/apt/apt.conf.d/99-dpkg-lock-timeout << 'APT_EOF'
+DPkg::Lock::Timeout "-1";
+APT_EOF
+
 # =============================================================================
 # Install Prerequisites
 # =============================================================================
 echo "Updating system packages..."
 apt-get update -y
-apt-get install -y wget gnupg2 lsb-release curl unzip ca-certificates netcat-openbsd sqlite3
+apt-get install -y wget gnupg2 lsb-release curl unzip ca-certificates netcat-openbsd sqlite3 rsync xfsprogs
+
+# =============================================================================
+# Mount Migration Data Disk
+# =============================================================================
+echo "Waiting for migration data disk..."
+DATA_DISK=""
+for _ in $(seq 1 60); do
+    for candidate in /dev/disk/azure/data/by-lun/0 /dev/disk/azure/scsi1/lun0; do
+        if [ -b "$candidate" ]; then
+            DATA_DISK="$candidate"
+            break 2
+        fi
+    done
+    sleep 10
+done
+
+if [ -n "$DATA_DISK" ]; then
+    echo "Preparing data disk $DATA_DISK..."
+    blkid "$DATA_DISK" >/dev/null 2>&1 || mkfs.xfs -f "$DATA_DISK"
+    DATA_UUID=$(blkid -s UUID -o value "$DATA_DISK")
+    mkdir -p /mnt/migration-data
+    mount "$DATA_DISK" /mnt/migration-data
+    rsync -aXS /home/ubuntu/ /mnt/migration-data/
+    umount /mnt/migration-data
+    rmdir /mnt/migration-data
+    echo "UUID=$DATA_UUID /home/ubuntu xfs defaults,nofail,discard 0 2" >> /etc/fstab
+    mount /home/ubuntu
+    chown ubuntu:ubuntu /home/ubuntu
+    echo "Data disk mounted at /home/ubuntu"
+else
+    echo "WARN: no data disk appeared; migration data will live on the OS disk" >&2
+fi
 
 # =============================================================================
 # Install PostgreSQL 18
@@ -67,6 +103,12 @@ make install
 ldconfig
 
 # =============================================================================
+# Install Azure CLI
+# =============================================================================
+echo "Installing Azure CLI..."
+curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+# =============================================================================
 # System Configuration
 # =============================================================================
 
@@ -94,6 +136,14 @@ export PATH=/usr/lib/postgresql/18/bin:$PATH
 alias pgcopydb-version='pgcopydb --version'
 alias psql-version='psql --version'
 alias check-planetscale='nc -zv app.connect.psdb.cloud 443 2>&1 | grep succeeded'
+
+case $- in
+    *i*)
+        if [ "$(id -un)" != "ubuntu" ]; then
+            printf '\nMigration tooling is installed under /home/ubuntu.\nSwitch to that account first:  sudo su - ubuntu\n\n'
+        fi
+        ;;
+esac
 PROFILE_EOF
 
 # Pull PlanetScale migration helper scripts
@@ -103,6 +153,16 @@ cp -r /tmp/migration-scripts/pgcopydb-helpers/* /home/ubuntu/
 rm -rf /tmp/migration-scripts
 chown -R ubuntu:ubuntu /home/ubuntu/
 chmod +x /home/ubuntu/*.sh
+
+# =============================================================================
+# Verify Installation
+# =============================================================================
+echo "=== Installation verification ===" >> /var/log/pgcopydb-setup-verification.log
+export PATH=/usr/lib/postgresql/18/bin:$PATH
+pgcopydb --version >> /var/log/pgcopydb-setup-verification.log 2>&1 || echo "pgcopydb installation failed" >> /var/log/pgcopydb-setup-verification.log
+psql --version >> /var/log/pgcopydb-setup-verification.log 2>&1 || echo "PostgreSQL client installation failed" >> /var/log/pgcopydb-setup-verification.log
+az --version >> /var/log/pgcopydb-setup-verification.log 2>&1 || echo "Azure CLI installation failed" >> /var/log/pgcopydb-setup-verification.log
+df -h /home/ubuntu >> /var/log/pgcopydb-setup-verification.log 2>&1
 
 echo ""
 echo "=========================================="

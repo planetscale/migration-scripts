@@ -294,7 +294,7 @@ Resources:
             06_build_pgcopydb:
               command: |
                 cd /tmp
-                git clone --branch v0.19.0 https://github.com/planetscale/pgcopydb.git
+                git clone --branch v0.20.0 https://github.com/planetscale/pgcopydb.git
                 cd pgcopydb
                 export PATH=/usr/lib/postgresql/18/bin:$PATH
                 make clean || true
@@ -346,19 +346,6 @@ Resources:
               mode: '000644'
               owner: root
               group: root
-            /home/ubuntu/.env:
-              content: |
-                # PlanetScale Migration Environment Variables
-                # Edit these values before running the migration
-
-                # Source Database
-                PGCOPYDB_SOURCE_PGURI="postgresql://user:password@source-host:5432/dbname?sslmode=require"
-
-                # Target Database (PlanetScale)
-                PGCOPYDB_TARGET_PGURI="postgresql://user:password@target-host.connect.psdb.cloud:5432/dbname?sslmode=require"
-              mode: '000600'
-              owner: ubuntu
-              group: ubuntu
           commands:
             02_clone_migration_scripts:
               command: |
