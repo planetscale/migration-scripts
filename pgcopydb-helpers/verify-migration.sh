@@ -35,20 +35,13 @@
 set -uo pipefail
 
 # ── filters.ini scope helpers ─────────────────────────────────────────────────
-# Shared with preflight-check.sh so both interpret filters.ini identically.
-# Sourced first: it only defines functions and initialises its arrays, so it has
-# no prerequisites, and everything below can rely on the helpers being present.
+# Shared with preflight-check.sh so both interpret filters.ini identically
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Guarded: no `set -e` here, so an unguarded failed source would continue with
-# the helpers undefined — every clause empty, silently widening the comparison.
 source "$SCRIPT_DIR/filters-lib.sh" || {
     echo "ERROR: cannot load $SCRIPT_DIR/filters-lib.sh" >&2
     exit 3
 }
 
-# die() (below) must abort the whole script even from inside a $(...) subshell,
-# where a plain exit would only kill the subshell — so it signals TOP_PID.
-# ERRFILE captures psql stderr so query errors are reported, not discarded.
 TOP_PID=$$
 trap 'exit 3' TERM
 ERRFILE=$(mktemp "${TMPDIR:-/tmp}/verify-migration.XXXXXX")
@@ -69,11 +62,7 @@ set +a
 set -u
 
 # ── Read-only safety belt ─────────────────────────────────────────────────────
-# verify only reads. default_transaction_read_only blocks any accidental write.
-# No global statement_timeout here: exact-count COUNT(*) queries set their own
-# (--exact-count-timeout), and a short lock_timeout could turn a transient lock on
-# a busy source into a false verification failure. Exported so every psql call
-# inherits it.
+# verify only reads. default_transaction_read_only blocks any accidental write
 export PGOPTIONS='-c default_transaction_read_only=on -c search_path=pg_catalog'
 
 if [[ -z "${PGCOPYDB_SOURCE_PGURI:-}" || -z "${PGCOPYDB_TARGET_PGURI:-}" ]]; then
@@ -134,9 +123,7 @@ die() {
     exit 3
 }
 
-# Run a catalog query, returning tab-separated rows (blank lines trimmed).
-# ON_ERROR_STOP + abort-on-failure is the core safety property: a failed query
-# can't return "" and be mistaken for an empty (matching) result — a false PASS.
+# Run a catalog query, returning tab-separated rows (blank lines trimmed)
 q() {
     local conn="$1" sql="$2" out rc
     out=$(psql "$conn" -v ON_ERROR_STOP=1 -t -A -F $'\t' -c "$sql" 2>"$ERRFILE"); rc=$?
@@ -151,17 +138,14 @@ $(printf '%s\n' "$sql" | sed 's/^/         /')"
     printf '%s\n' "$out" | grep -v '^$' || true
 }
 
-# Exact COUNT(*) for one table with a per-table timeout. Prints one token:
-# a number, "TIMEOUT" (statement_timeout — expected on huge tables), or "ERROR"
-# (any other failure; real psql message goes to stderr). Caller handles all three
-# so an unverifiable table is never silently treated as a match.
+# Exact COUNT(*) for one table with a per-table timeout
 exact_count() {
     local conn="$1" table="$2" out rc num
     out=$(psql "$conn" -v ON_ERROR_STOP=1 -t -A \
         -c "SET statement_timeout='${EXACT_COUNT_TIMEOUT}s'" \
         -c "SELECT COUNT(*) FROM ${table}" 2>"$ERRFILE"); rc=$?
     if (( rc == 0 )); then
-        # psql prints "SET" on stdout even in -t mode; keep only the numeric line.
+        
         num=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' | tail -1)
         if [[ -n "$num" ]]; then printf '%s' "$num"; return; fi
     fi
@@ -177,21 +161,19 @@ exact_count() {
 }
 
 # Count non-empty lines in a variable
-# grep -c exits 1 on zero matches (but still prints "0"), so || true is enough
 line_count() { printf '%s' "${1:-}" | grep -c . || true; }
 
 # ── Column-default comparison ─────────────────────────────────────────────────
-# Strip the payload, leaving one identity per line.  def_keys <marker> <lines>
+# Identity part of each line.  def_keys <marker> <lines>
 def_keys() {
     local marker="$1"
-    # Split at the FIRST marker: a default may contain the marker text itself.
+    # First marker only: a default may contain it.
     printf '%s' "${2:-}" | awk -v m="$marker" '
         { i = index($0, m); print (i ? substr($0, 1, i - 1) : $0) }
     ' | sort -u
 }
 
-# Partition an exact-diff result by whether the identity is also absent from the
-# target.  split_missing <absent|differing> <missing-lines> <marker> <missing-keys>
+# split_missing <absent|differing> <missing-lines> <marker> <missing-keys>
 split_missing() {
     local mode="$1" missing="${2:-}" marker="$3" keys="${4:-}" line key
     [[ -z "$missing" ]] && return 0
@@ -208,8 +190,7 @@ split_missing() {
     return 0
 }
 
-# Print the target's version of each differing object, beside the source's.
-#   report_differing <marker> <differing-lines> <target-lines>
+# report_differing <marker> <differing-lines> <target-lines>
 report_differing() {
     local marker="$1" differing="${2:-}" target="${3:-}" line key tgt
     while IFS= read -r line; do
@@ -221,6 +202,13 @@ report_differing() {
         printf "         source: %s\n" "${line#*"$marker"}"
         printf "         target: %s\n" "${tgt#*"$marker"}"
     done <<< "$differing"
+}
+
+# Fold an expression with the target's planner; "" if it cannot plan it.
+# canonical_expr <quoted-table> <expr>
+canonical_expr() {
+    psql "$TARGET_CONN" -t -A -c "EXPLAIN (VERBOSE, COSTS OFF) SELECT $2 FROM ONLY $1" 2>/dev/null \
+        | sed -n 's/^ *Output: //p'
 }
 
 # Absolute value
@@ -241,8 +229,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# These go into SQL (LIMIT/BETWEEN/statement_timeout) and shell arithmetic;
-# reject non-integers up front so a typo fails here, not silently as 0 later.
+# These go into SQL (LIMIT/BETWEEN/statement_timeout) and shell arithmetic
 require_int() { [[ "$2" =~ ^[0-9]+$ ]] || { echo "ERROR: $1 requires a non-negative integer, got: '$2'" >&2; exit 1; }; }
 require_int --row-count-tolerance "$ROW_TOLERANCE"
 require_int --spot-check-tables   "$SPOT_CHECK_N"
@@ -254,15 +241,12 @@ require_int --exact-count-timeout "$EXACT_COUNT_TIMEOUT"
 SCHEMA_SQL_FILTER="AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')"
 SCHEMA_SQL_FILTER_PLAIN="AND table_schema NOT IN ('pg_catalog','information_schema','pg_toast')"
 
-# Load filters.ini so checks are scoped to the exact object set the migration copied.
-# filters.ini is required: verify must use the same scope the migration ran with, so the
-# same file governs both.
+# Load filters.ini so checks are scoped to the exact object set the migration copied
 if [[ -f "$FILTERS_FILE" ]]; then
     parse_filters_ini "$FILTERS_FILE"
     FILTER_DESC="$FILTERS_FILE — $(filter_scope_describe)"
     # include-only-table copies the listed tables plus their own indexes, constraints
-    # and sequences — but not the views, routines or standalone sequences that merely
-    # share those schemas, so checks 6/7/9 are skipped rather than false-alarmed.
+    # and sequences, but no other objects
     INCLUDE_TABLE_MODE=false
     [[ "$(filter_scope_mode)" == "include-table" ]] && INCLUDE_TABLE_MODE=true
 else
@@ -304,7 +288,6 @@ fi
 # =============================================================================
 log_section "1/11  CONNECTION TEST"
 
-# Use raw psql (not q()) so the exit code is real and errors are visible
 echo -n "  Testing source connection... "
 if SRC_PING=$(psql "$SOURCE_CONN" -t -A -c "SELECT version()" 2>&1); then
     log_pass "Source DB connected"
@@ -414,7 +397,7 @@ TGT_COLS=$(q "$TARGET_CONN" "$COL_QUERY")
 
 MISSING_COLS=$(comm -23 <(echo "$SRC_COLS" | sort) <(echo "$TGT_COLS" | sort) 2>/dev/null || true)
 
-# Identity carries type= and nullable=, so only default= drift is downgraded.
+# Only default= drift is downgraded.
 MISSING_COL_KEYS=$(comm -23 <(def_keys '  default=' "$SRC_COLS") <(def_keys '  default=' "$TGT_COLS") 2>/dev/null || true)
 ABSENT_COLS=$(split_missing absent    "$MISSING_COLS" '  default=' "$MISSING_COL_KEYS")
 DIFFERING_COLS=$(split_missing differing "$MISSING_COLS" '  default=' "$MISSING_COL_KEYS")
@@ -449,9 +432,9 @@ IDX_QUERY="
         || '  valid='   || (ix.indisvalid AND ix.indisready)::text
         || '  primary=' || ix.indisprimary::text
         || '  method='  || am.amname
-        || '  ncols='   || ix.indnatts::text
         || '  partial=' || (ix.indpred IS NOT NULL)::text
-        || '  expr='    || (ix.indexprs IS NOT NULL)::text
+        || '  cols='    || (SELECT string_agg(pg_get_indexdef(ix.indexrelid, k, true), ',' ORDER BY k)
+                            FROM generate_series(1, ix.indnatts) k)
     FROM pg_index ix
     JOIN pg_class i      ON i.oid = ix.indexrelid
     JOIN pg_class t      ON t.oid = ix.indrelid
@@ -476,8 +459,7 @@ else
     echo "$MISSING_IDX" | head -20 | while IFS= read -r i; do printf "       %s\n" "$i"; done
 fi
 
-# An invalid index exists under the right name but indexes and enforces nothing
-# until it is rebuilt, so it gets its own line rather than a generic mismatch.
+# An invalid index enforces nothing.
 INVALID_IDX=$(printf '%s\n' "$TGT_IDX" | grep -F '  valid=false' || true)
 [[ -n "$INVALID_IDX" ]] && {
     log_fail "INVALID indexes in target ($(line_count "$INVALID_IDX")) — build failed; these enforce nothing:"
@@ -491,16 +473,22 @@ INVALID_IDX=$(printf '%s\n' "$TGT_IDX" | grep -F '  valid=false' || true)
 # =============================================================================
 log_section "5/11  CONSTRAINTS  (PK / FK / UNIQUE / CHECK)"
 
-# ref= joins pg_class rather than casting confrelid::regclass, whose output is
-# schema-qualified or not depending on the session search_path.
+# Not regclass: its output depends on search_path. Columns by name: restore
+# renumbers attnums after dropped columns.
 CON_QUERY="
     SELECT n.nspname || '.' || t.relname || '  con=' || c.conname
         || '  type='  || c.contype::text
         || '  valid=' || c.convalidated::text
-        || '  ncols=' || COALESCE(cardinality(c.conkey), 0)::text
+        || '  cols='  || COALESCE((SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+                                   FROM unnest(c.conkey) WITH ORDINALITY k(attnum, ord)
+                                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum), '-')
         || '  ondel=' || COALESCE(NULLIF(BTRIM(c.confdeltype::text), ''), '-')
         || '  onupd=' || COALESCE(NULLIF(BTRIM(c.confupdtype::text), ''), '-')
-        || '  ref='   || COALESCE(rn.nspname || '.' || r.relname, '-')
+        || '  ref='   || COALESCE(rn.nspname || '.' || r.relname || '('
+                                  || (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+                                      FROM unnest(c.confkey) WITH ORDINALITY k(attnum, ord)
+                                      JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum)
+                                  || ')', '-')
     FROM pg_constraint c
     JOIN pg_class t     ON t.oid = c.conrelid
     JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -527,7 +515,7 @@ else
     echo "$MISSING_CON" | head -20 | while IFS= read -r c; do printf "       %s\n" "$c"; done
 fi
 
-# NOT VALID constraints exist but are not enforced against existing rows.
+# NOT VALID: existing rows are unchecked.
 NOTVALID_CON=$(printf '%s\n' "$TGT_CON" | grep -F '  valid=false' || true)
 [[ -n "$NOTVALID_CON" ]] && {
     log_fail "NOT VALID constraints in target ($(line_count "$NOTVALID_CON")) — not enforced for existing rows:"
@@ -535,6 +523,50 @@ NOTVALID_CON=$(printf '%s\n' "$TGT_CON" | grep -F '  valid=false' || true)
 }
 
 [[ -n "$EXTRA_CON" ]] && log_warn "Extra constraints in target: $(line_count "$EXTRA_CON")"
+
+# Differing CHECK text is compared after planner normalization.
+CHECK_QUERY="
+    SELECT n.nspname || '.' || t.relname || '  con=' || c.conname,
+           format('%I.%I', n.nspname, t.relname),
+           pg_get_expr(c.conbin, c.conrelid)
+    FROM pg_constraint c
+    JOIN pg_class t     ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE c.contype = 'c' $SCHEMA_SQL_FILTER
+    $(schema_clause "n.nspname") $(table_clause "n.nspname" "t.relname")
+    $(extension_rel_clause "n.nspname" "t.relname")
+    $(extension_oid_clause "pg_constraint" "c.oid")
+    ORDER BY 1"
+
+SRC_CHECK=$(q "$SOURCE_CONN" "$CHECK_QUERY")
+TGT_CHECK=$(q "$TARGET_CONN" "$CHECK_QUERY")
+
+CHANGED_CHECK=""; UNSURE_CHECK=""
+while IFS=$'\t' read -r con qtable src_expr _ tgt_expr; do
+    [[ "$src_expr" == "$tgt_expr" ]] && continue
+    src_canon=$(canonical_expr "$qtable" "$src_expr")
+    tgt_canon=$(canonical_expr "$qtable" "$tgt_expr")
+    detail="$con"$'\n'"  source: $src_expr"$'\n'"  target: $tgt_expr"$'\n'
+    if [[ -z "$src_canon" || -z "$tgt_canon" ]]; then
+        UNSURE_CHECK+="$detail"
+    elif [[ "$src_canon" != "$tgt_canon" ]]; then
+        CHANGED_CHECK+="$detail"
+    fi
+done < <(join -t$'\t' \
+    <(echo "$SRC_CHECK" | sort -t$'\t' -k1,1) \
+    <(echo "$TGT_CHECK" | sort -t$'\t' -k1,1))
+
+if [[ -n "$CHANGED_CHECK" ]]; then
+    log_fail "CHECK expressions differ between source and target ($(printf '%s' "$CHANGED_CHECK" | grep -c '^  source: ')):"
+    printf '%s' "$CHANGED_CHECK" | head -30 | while IFS= read -r l; do printf "       %s\n" "$l"; done
+elif [[ -z "$UNSURE_CHECK" ]]; then
+    log_pass "All CHECK expressions match"
+fi
+
+[[ -n "$UNSURE_CHECK" ]] && {
+    log_warn "CHECK text differs and the target could not normalize it ($(printf '%s' "$UNSURE_CHECK" | grep -c '^  source: ')) — review:"
+    printf '%s' "$UNSURE_CHECK" | head -30 | while IFS= read -r l; do printf "       %s\n" "$l"; done
+}
 
 # =============================================================================
 # 6. VIEWS
@@ -675,7 +707,7 @@ else
     echo "$MISSING_SEQS" | while IFS= read -r s; do printf "       %s\n" "$s"; done
 fi
 
-# Compare last_value for each sequence (fast — reads pg_sequences)
+# Compare last_value for each sequence 
 SEQ_VAL_QUERY="
     SELECT schemaname || '.' || sequencename, last_value
     FROM pg_sequences
@@ -746,9 +778,6 @@ else
 
         # Only numeric and date/time types benefit from index min/max
         if [[ "$coltype" =~ ^(int2|int4|int8|float4|float8|numeric|money|bigserial|serial|smallserial|timestamp|timestamptz|date|time|timetz) ]]; then
-            # Per-table query: report failure and move on (don't abort the run),
-            # but never let a failed query pass as a silent min=/max= "match".
-            # qtable/qcol are quote_ident()'d so mixed-case/quoted names work.
             MM_SQL="SELECT MIN(${qcol})::text, MAX(${qcol})::text FROM ${qtable}"
             SRC_MM=$(psql "$SOURCE_CONN" -v ON_ERROR_STOP=1 -t -A -F $'\t' -c "$MM_SQL" 2>"$ERRFILE"); SRC_RC=$?
             SRC_ERR=$(cat "$ERRFILE")
@@ -833,9 +862,6 @@ else
         while IFS=$'\t' read -r table size_bytes size_h qtable; do
             [[ -z "$table" ]] && continue
 
-            # exact_count() returns a number, "TIMEOUT", or "ERROR" — a failed
-            # count is surfaced, never read as 0 or mislabelled as a timeout.
-            # qtable is quote_ident()'d so mixed-case/quoted names work.
             SRC_CNT=$(exact_count "$SOURCE_CONN" "$qtable")
             TGT_CNT=$(exact_count "$TARGET_CONN" "$qtable")
 
