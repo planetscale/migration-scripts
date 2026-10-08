@@ -1,0 +1,104 @@
+name: lint
+
+# First-pass linting for the actively-developed migration paths. Built to be
+# extended — add jobs and tighten the existing gates over time.
+#
+# No `paths:` filter on purpose: a filtered workflow doesn't run on a PR it
+# doesn't match, so its checks never report — and one marked required in branch
+# protection would block the merge forever. These jobs are cheap; always run them.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+# `push` is scoped to main so a PR commit runs this once, not twice.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+# Pinned so the gate is reproducible: a linter's new rules land in a deliberate
+# bump commit instead of turning an unrelated PR red.
+env:
+  SHELLCHECK_VERSION: v0.11.0
+  CFN_LINT_VERSION: 1.52.1
+  TERRAFORM_VERSION: 1.15.8
+  TFLINT_VERSION: v0.61.0
+
+jobs:
+  shell:
+    name: shell (shellcheck + bash -n)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: install shellcheck
+        # Pinned build rather than whatever the runner image ships.
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ -C "$HOME/.local/bin" --strip-components=1 "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: shellcheck --version
+        run: shellcheck --version
+      - name: bash -n (syntax)
+        run: |
+          set -euo pipefail
+          find pgcopydb-helpers pgcopydb-templates -name '*.sh' -print0 \
+            | xargs -0 -I{} bash -n "{}"
+      - name: shellcheck
+        # Gates at warning severity; benign/unfixable codes are disabled in
+        # the repo-root .shellcheckrc. Tighten (lower severity, drop disables)
+        # as the tree is cleaned.
+        run: |
+          set -euo pipefail
+          find pgcopydb-helpers pgcopydb-templates -name '*.sh' -print0 \
+            | xargs -0 shellcheck --severity=warning
+
+  cloudformation:
+    name: cloudformation (cfn-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - name: install cfn-lint
+        run: pip install "cfn-lint==${CFN_LINT_VERSION}"
+      - name: cfn-lint
+        run: cfn-lint pgcopydb-templates/aws-cloudformation/*.yaml
+
+  terraform:
+    name: terraform (fmt + validate + tflint)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - pgcopydb-templates/aws-terraform
+          - pgcopydb-templates/gcp-terraform
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: terraform fmt
+        # -recursive: without it fmt checks only the named dir, so any future
+        # subdirectory would silently drop out of the gate.
+        run: terraform fmt -check -diff -recursive "${{ matrix.dir }}"
+      - name: terraform init
+        run: terraform -chdir="${{ matrix.dir }}" init -backend=false -input=false -no-color
+      - name: terraform validate
+        run: terraform -chdir="${{ matrix.dir }}" validate -no-color
+      - uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+      - name: tflint
+        working-directory: ${{ matrix.dir }}
+        run: |
+          tflint --init
+          tflint --no-color

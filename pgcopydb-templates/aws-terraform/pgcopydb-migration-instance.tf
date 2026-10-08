@@ -253,10 +253,10 @@ resource "aws_vpc_security_group_ingress_rule" "icmp_dest_unreachable" {
 # =============================================================================
 
 resource "aws_instance" "pgcopydb" {
-  ami                    = data.aws_ssm_parameter.ubuntu_ami.value
-  instance_type          = var.instance_type
-  key_name               = var.key_pair_name != "" ? var.key_pair_name : null
-  iam_instance_profile   = aws_iam_instance_profile.instance_profile.name
+  ami                         = data.aws_ssm_parameter.ubuntu_ami.value
+  instance_type               = var.instance_type
+  key_name                    = var.key_pair_name != "" ? var.key_pair_name : null
+  iam_instance_profile        = aws_iam_instance_profile.instance_profile.name
   subnet_id                   = var.subnet_id
   vpc_security_group_ids      = [aws_security_group.pgcopydb.id]
   associate_public_ip_address = true
