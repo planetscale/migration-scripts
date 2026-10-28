@@ -322,6 +322,34 @@ Displays a full migration progress dashboard: phase completion status, table/ind
 
 ---
 
+#### `check-copy-progress.sh`
+
+Shows how much data is left for each running COPY task (a whole table, or one part of a split table). Wraps `pgcopydb list progress`, then measures each running task in rows on the **source**.
+
+```bash
+~/check-copy-progress.sh
+~/check-copy-progress.sh --no-target                                 # skip the target size query
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/check-copy-progress.sh   # explicit dir
+```
+
+**Sections:**
+1. **pgcopydb list progress** — table and index counts from pgcopydb.
+2. **Running COPY tasks** — for each task: bytes sent, rows copied (`pg_stat_progress_copy` on the source), estimated rows (`EXPLAIN` on the task's `WHERE` clause), percent, rows/s, elapsed time, and ETA.
+3. **COPY tasks not started** — tables and split parts with no start time in the `summary` table.
+4. **Target size** — `pg_database_size` and the WAL size (`pg_ls_waldir()`, needs `pg_monitor`).
+
+**Why rows, not bytes:** pgcopydb splits integer-keyed tables into equal key ranges, not equal data sizes, and the last part has no upper bound. `s_table_size` is `pg_table_size()`, which includes compressed TOAST, while `summary.bytes` is uncompressed COPY text. On a large table with text columns, one part can send several times the on-disk size of the full table. The `Bytes` row of `pgcopydb list progress` has the same mix, so Done can be larger than Total.
+
+**Interpreting it:** `est_rows` is a planner estimate, so `pct` can pass 100% for a short time before a task finishes. The ETA uses the average row rate since the task started. A `-` in `copied` means the source session is not visible to the connecting role.
+
+**When to use:** During the COPY phase, when a large table or split part runs for a long time and you need to know how much is left.
+
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI` (optional with `--no-target`). Reads from the most recent `~/migration_*` directory.
+
+**Read-only** — opens the SQLite catalog with `-readonly` and connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout. `EXPLAIN` does not run the query.
+
+---
+
 #### `check-copy-stall.sh`
 
 Diagnoses a stalled or slow COPY by inspecting live session, lock, and wait state on the **target** database. Use it when `check-migration-status.sh` shows a COPY that does not seem to be progressing, to determine *why*.
