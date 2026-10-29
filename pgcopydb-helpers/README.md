@@ -31,6 +31,8 @@ Repeat the `GRANT USAGE`, `GRANT SELECT`, and `ALTER DEFAULT PRIVILEGES` stateme
 
 **`wal_sender_timeout`:** Setting this to `0` on the source prevents the replication slot from being dropped during long COPY phases. The initial data copy can take hours on large databases, and the default timeout (60s) may cause PostgreSQL to drop the idle replication connection before CDC streaming begins.
 
+**`max_slot_wal_keep_size`:** The slot retains all WAL from the start of the copy until CDC applies it, and CDC can only apply once the copy finishes. If retained WAL exceeds this limit, PostgreSQL invalidates the slot and the migration must start over. Set it to `-1` (unlimited) for the migration and monitor source disk space. 
+
 **`pgoutput` publication (CDC only):** with the default `OUTPUT_PLUGIN=pgoutput`, the source only streams changes for tables that belong to a publication. Left to itself pgcopydb runs `CREATE PUBLICATION ... FOR TABLE`, which needs `CREATE` on the database **and ownership of every published table** — privileges a read-only `migration_user` does not have and hosted platforms rarely grant. Create the publication once as your platform's admin role instead and point the scripts at it; `migration_user` needs no additional grants.
 
 As the admin role, generate the statement from the catalog. This reproduces the list pgcopydb would build, so **apply the same exclusions as your `~/filters.ini`** — a table in the publication but outside the migration still has its `UPDATE`/`DELETE` blocked, and a migrated table missing from the publication has its changes silently dropped:
@@ -215,7 +217,7 @@ Run the preflight check to validate that both databases and the migration instan
 ~/preflight-check.sh
 ```
 
-Fix any FAILs before proceeding. Warnings should be reviewed — particularly `wal_sender_timeout` (set to `0` for large migrations) and leftover pgcopydb state from previous attempts.
+Fix any FAILs before proceeding. Warnings should be reviewed — particularly `wal_sender_timeout` (set to `0` for large migrations), `max_slot_wal_keep_size` (set to `-1` so the slot cannot be invalidated mid-copy), and leftover pgcopydb state from previous attempts.
 
 If you are running a live migration with CDC (`--follow`), fix replica identity on tables that lack a primary key:
 
