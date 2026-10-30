@@ -410,6 +410,22 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                # speci
 
 ---
 
+#### `start-resume-cdc-screen.sh`
+
+Runs `resume-cdc.sh` inside a detached screen session named `resume-cdc`, so CDC survives SSH disconnects. Kills any existing `resume-cdc` screen first.
+
+```bash
+~/start-resume-cdc-screen.sh
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/start-resume-cdc-screen.sh   # specify explicitly
+screen -r resume-cdc                                                     # attach; Ctrl-A D to detach
+```
+
+**When to use:** In place of `resume-cdc.sh` when you resume CDC from an SSH session.
+
+**Requires:** the same as `resume-cdc.sh`
+
+---
+
 #### `target-clean.sh`
 
 Wipes all user objects from the target database for a fresh re-migration. Shows a summary of what will be dropped and prompts for confirmation.

@@ -336,6 +336,8 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                    # o
 
 This runs `pgcopydb follow` directly (not `clone --follow`), skipping schema dump/restore, COPY, and index creation entirely. Use this when you know the data copy is complete and only CDC streaming needs to restart. Output is written to `migration.log` in the migration directory.
 
+To run the CDC resume in a detached screen session that survives SSH disconnects, use `~/start-resume-cdc-screen.sh`. Attach with `screen -r resume-cdc`.
+
 To start completely over, wipe the target and clean up replication:
 
 ```bash
@@ -529,6 +531,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `emergency-stop.sh` | Recovery | Immediately stop a running migration and all subprocesses |
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
 | `resume-cdc.sh` | Recovery | Resume only the CDC phase (skips clone) |
+| `start-resume-cdc-screen.sh` | Recovery | Run `resume-cdc.sh` in a detached screen session |
 | `target-clean.sh` | Recovery | Wipe target database for re-migration (prompts for confirmation) |
 | `drop-replication-slots.sh` | Cleanup | Remove replication slots, the pgoutput publication, and origins |
 | `stop-cdc.sh` | Cutover | Set CDC endpoint via SQLite to initiate cutover |
