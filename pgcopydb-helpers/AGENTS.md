@@ -376,6 +376,43 @@ Displays CDC-specific replication progress: apply and streaming LSN positions, b
 
 ---
 
+#### `check-log-errors.sh`
+
+Groups the ERROR and FATAL lines in `migration.log` into categories. For each category, it prints the event count, the first and last timestamp, and the most frequent messages. Quoted names, numbers, LSNs, and WAL segment names are replaced, so one error on many objects shows as one message.
+
+```bash
+~/check-log-errors.sh                                  # newest ~/migration_*/migration.log
+~/check-log-errors.sh /path/to/migration.log
+~/check-log-errors.sh --since "2026-10-29 12:00" --warnings
+~/check-log-errors.sh --show "restore: POLICY"         # print the raw lines for matching categories
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--since "YYYY-MM-DD HH:MM"` | — | Read only lines at or after this time. `migration.log` is appended by every run and resume |
+| `--warnings` | off | Also include WARN lines |
+| `--top <n>` | 3 | Messages to show per category |
+| `--show <text>` | — | Print every log line for the categories whose name contains `<text>` (case-insensitive) |
+
+**Categories:**
+- `restore: <TYPE>` — a pg_restore object failure. The category is the object type (`POLICY`, `FK CONSTRAINT`, `ACL`, `TRIGGER`) and the message is the reason. The script takes the type from the `Command was:` statement after the error. pg_restore prints the `from TOC entry` line only with `--verbose`; when that line is present, the script uses its type. `restore: other` is a pg_restore error with no statement
+  - The pg_restore lines in `migration.log` are not clean. pgcopydb reads pg_restore output in 1024-byte chunks and logs each chunk line by line, so a line that crosses a chunk edge is split into two log lines. pg_restore writes `pg_restore:`, `error: `, and the message body as separate writes to unbuffered stderr, so with `--jobs` the prefixes of different workers mix (for example `pg_restore:pg_restore:  error: error: could not execute query: ...`). The script joins the pg_restore lines of each pgcopydb process again and splits them at `could not execute query:`, which starts each message body. Thus `grep -c "pg_restore: error:"` gives a smaller count than the script
+  - The header shows the number of failed statements in the log. With `--jobs`, pg_restore counts each failed item two times in `errors ignored on restore` (the worker reports its error count, and the leader adds one more for the item), so that number is about two times the real count
+- `slot: missing`, `slot: invalidated / WAL removed`, `slot: in use`, `slot: limit reached`, `slot: other` — replication slot errors on the source. `cannot read from logical replication slot` (SQLSTATE 55000) is an invalidated slot; `--show slot` prints the `DETAIL` line with the cause
+- `replication origin`, `cdc: stream`, `cdc: apply / transform` — CDC errors
+- `pgcopydb summary` — pgcopydb lines that end in `see above for details`. They repeat an error that is counted in a different category
+- `connection`, `timeout / lock`, `resources`, `permission`, `extension`, `data / constraint`, `already exists`, `missing object`, `process exit`, `other`
+
+Categories come from the message text first, then from the SQLSTATE that pgcopydb logs as `[SOURCE pid] [SQLSTATE]`. These lines are not counted as events: continuation lines (`DETAIL`, `HINT`, `Context`, `SQL query`, `Command was` and the SQL text after it), and header lines that end in a colon, such as `Failed to send replication command:`. `--show` prints the continuation lines with their event.
+
+**When to use:** After a failed or noisy run, before you read the full log. It shows if the errors are a large number of one schema object type (for example, policies that reference roles not on the target) or a CDC problem (for example, an invalidated slot).
+
+**Requires:** a readable `migration.log`. Takes the path as an argument, else `$MIGRATION_DIR/migration.log`, else the newest `~/migration_*/migration.log`. **No `~/.env` needed** — it does not connect to a database.
+
+**Exit codes:** `0` = no errors, `1` = errors found, `3` = log not readable.
+
+---
+
 ### Recovery
 
 #### `resume-migration.sh`
