@@ -196,7 +196,19 @@ else
     warn "wal_sender_timeout" "$WAL_TIMEOUT (recommend 0 for large migrations)"
 fi
 
-# 9. Prepared transactions
+# 9. max_slot_wal_keep_size
+SLOT_KEEP=$(src_query "SELECT setting || '|' || pg_size_pretty(setting::bigint * 1048576) FROM pg_settings WHERE name = 'max_slot_wal_keep_size';")
+SLOT_KEEP_MB=$(echo "$SLOT_KEEP" | cut -d'|' -f1)
+SLOT_KEEP_PRETTY=$(echo "$SLOT_KEEP" | cut -d'|' -f2)
+if [ -z "$SLOT_KEEP_MB" ]; then
+    warn "max_slot_wal_keep_size" "could not read setting"
+elif [ "$SLOT_KEEP_MB" = "-1" ]; then
+    pass "max_slot_wal_keep_size" "-1 (unlimited)"
+else
+    warn "max_slot_wal_keep_size" "$SLOT_KEEP_PRETTY (recommend -1 for the duration of the migration)"
+fi
+
+# 10. Prepared transactions
 PREP_COUNT=$(src_query "SELECT count(*) FROM pg_prepared_xacts;")
 if [ "${PREP_COUNT:-0}" = "0" ]; then
     pass "Prepared transactions" "none"
@@ -204,7 +216,7 @@ else
     warn "Prepared transactions" "$PREP_COUNT found (can block slot creation)"
 fi
 
-# 10. Source user read permissions
+# 11. Source user read permissions
 # CONNECT on the database (already connected, but explicit grant is required)
 DB_CONNECT=$(src_query "SELECT has_database_privilege(current_user, current_database(), 'CONNECT');")
 SRC_USER=$(src_query "SELECT current_user;")
@@ -261,7 +273,7 @@ echo ""
 echo "  TARGET DATABASE"
 echo "  ────────────────────────────────────────────────────────────────"
 
-# 11. Connectivity
+# 12. Connectivity
 TGT_VER=$(tgt_query "SHOW server_version;")
 if [ -n "$TGT_VER" ]; then
     pass "Connectivity" "PostgreSQL $TGT_VER"
@@ -275,7 +287,7 @@ else
 fi
 
 if [ -n "$TGT_VER" ]; then
-    # 12. Replication permission on target
+    # 13. Replication permission on target
     TGT_REPL=$(tgt_query "SELECT rolreplication FROM pg_roles WHERE rolname = current_user;")
     if [ "$TGT_REPL" = "t" ]; then
         pass "Replication permission" "role has REPLICATION attribute"
@@ -283,7 +295,7 @@ if [ -n "$TGT_VER" ]; then
         fail "Replication permission" "no REPLICATION attribute (needed for replication origin)"
     fi
 
-    # 13. Existing pgcopydb schema
+    # 14. Existing pgcopydb schema
     PGCOPYDB_SCHEMA=$(tgt_query "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'pgcopydb';")
     if [ -n "$PGCOPYDB_SCHEMA" ]; then
         warn "Existing pgcopydb schema" "pgcopydb schema exists (leftover?)"
@@ -291,7 +303,7 @@ if [ -n "$TGT_VER" ]; then
         pass "Existing pgcopydb schema" "none"
     fi
 
-    # 14. Extension compatibility — exclusions come from the shared filters.ini
+    # 15. Extension compatibility — exclusions come from the shared filters.ini
     # parser ([exclude-extension] → FILTER_EXCLUDE_EXTENSIONS), as newline list.
     FILTER_EXCLUDED_EXTS=""
     if [ ${#FILTER_EXCLUDE_EXTENSIONS[@]} -gt 0 ]; then
@@ -326,7 +338,7 @@ echo ""
 echo "  MIGRATION INSTANCE"
 echo "  ────────────────────────────────────────────────────────────────"
 
-# 14. filter file
+# 16. filter file
 if [ -f "$FILTER_FILE" ]; then
     pass "filters.ini" "$FILTER_FILE found"
     _conflicts=$(filter_conflicts)
@@ -335,7 +347,7 @@ else
     fail "filters.ini" "$FILTER_FILE not found"
 fi
 
-# 15. pgcopydb binary
+# 17. pgcopydb binary
 PGCOPYDB_BIN=$(command -v pgcopydb 2>/dev/null || echo "")
 if [ -z "$PGCOPYDB_BIN" ]; then
     PGCOPYDB_BIN=$(ls -d /usr/lib/postgresql/*/bin/pgcopydb 2>/dev/null | sort -rV | head -n1 || true)

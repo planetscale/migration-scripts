@@ -125,11 +125,11 @@ Validates all migration prerequisites before starting `pgcopydb clone --follow`.
 ```
 
 **Checks performed:**
-- **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, prepared transactions, per-schema read permissions (USAGE plus SELECT on tables, materialized views, and sequences) scoped to what `~/filters.ini` will migrate — matviews are counted as tables (relkind `'m'`) and called out in the detail line; schemas/tables outside the filter scope are skipped
+- **Source:** connectivity, `wal_level = logical`, replication permission (REPLICATION, SUPERUSER, or rds_replication), available replication slots, available WAL senders, leftover pgcopydb slot, FOR ALL TABLES publications, `wal_sender_timeout`, `max_slot_wal_keep_size` (PASS on `-1`; WARNs on any finite value, since the slot is invalidated if retained WAL exceeds it during the copy, and when the setting is absent or cannot be read), prepared transactions, per-schema read permissions (USAGE plus SELECT on tables, materialized views, and sequences) scoped to what `~/filters.ini` will migrate — matviews are counted as tables (relkind `'m'`) and called out in the detail line; schemas/tables outside the filter scope are skipped
 - **Target:** connectivity, replication permission, leftover pgcopydb schema, extension compatibility (FAILs if any source extension is absent on target — add missing ones to `[exclude-extension]` in `filters.ini` if the exclusion is intentional)
 - **Instance:** `~/filters.ini` exists (WARNs if it uses a pgcopydb-disallowed section combination — `include-only-table` with `exclude-schema`/`exclude-table`, or `include-only-schema` with `exclude-schema`), pgcopydb binary on PATH
 
-**When to use:** Before every migration attempt. Run after setting up `~/.env` and `~/filters.ini` but before `~/start-migration-screen.sh`. Fix all FAILs before proceeding. Review WARNs — especially `wal_sender_timeout` (should be `0` for large migrations) and leftover state from previous attempts.
+**When to use:** Before every migration attempt. Run after setting up `~/.env` and `~/filters.ini` but before `~/start-migration-screen.sh`. Fix all FAILs before proceeding. Review WARNs — especially `wal_sender_timeout` (should be `0` for large migrations), `max_slot_wal_keep_size` (should be `-1`) and leftover state from previous attempts.
 
 **Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
 
