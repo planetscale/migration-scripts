@@ -284,6 +284,8 @@ To receive Slack alerts for migration events (errors, initial copy completion, s
    MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
    ```
 
+   If the source is a replica, the script uses the replica replay LSN. Set `PGCOPYDB_PRIMARY_PGURI` in `~/.env` to make it wait until the replica replays up to the primary flush LSN. Without it, writes on the primary that the replica has not replayed are not copied.
+
 4. **Wait** for pgcopydb to apply all remaining changes and exit. Monitor with `check-cdc-status.sh`.
 
 5. **Verify** data on the target using `verify-migration.sh`.
@@ -430,6 +432,7 @@ Every tunable setting lives in `~/.env`. Change a value once and all scripts use
 |----------|---------|-----------------|-------------|
 | `PGCOPYDB_SOURCE_PGURI` | none (required) | `--source` | Source connection string |
 | `PGCOPYDB_TARGET_PGURI` | none (required) | `--target` | Target connection string |
+| `PGCOPYDB_PRIMARY_PGURI` | unset | — | Primary of a replica source. `stop-cdc.sh` waits for the replica to catch up to it |
 | `TABLE_JOBS` | 8 | `--table-jobs`, `--split-max-parts` | Parallel COPY workers |
 | `INDEX_JOBS` | 6 | `--index-jobs` | Parallel index build workers |
 | `SPLIT_TABLES_LARGER_THAN` | 50GB | `--split-tables-larger-than` | Size above which a table is copied in parts |

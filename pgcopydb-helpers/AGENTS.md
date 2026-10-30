@@ -456,6 +456,8 @@ Cleans up pgcopydb replication artifacts on both source and target databases.
 
 Sets the CDC endpoint LSN so pgcopydb stops streaming after reaching a specific position. This is how you initiate cutover. The script fetches the current WAL LSN from the source automatically, displays it, and prompts for confirmation before writing it to the sentinel.
 
+**Replica source:** if `pg_is_in_recovery()` is true on the source, the script uses `pg_last_wal_replay_lsn()` instead. With `PGCOPYDB_PRIMARY_PGURI` set, it first reads `pg_current_wal_flush_lsn()` on the primary and waits until the replica replays up to that LSN. Without it, the script prints a warning: primary writes that the replica has not replayed are not copied.
+
 ```bash
 ~/stop-cdc.sh
 MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
@@ -470,7 +472,7 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh  # explicit dir
 6. Switch application to the target
 7. Run `drop-replication-slots.sh` to clean up
 
-**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`
+**Requires:** `PGCOPYDB_SOURCE_PGURI`, `PGCOPYDB_TARGET_PGURI`; `PGCOPYDB_PRIMARY_PGURI` is optional, for a replica source
 
 ---
 
@@ -593,6 +595,7 @@ Every tunable is set once in `~/.env` and picked up by every script that uses it
 |----------|---------|-----------------|---------|
 | `PGCOPYDB_SOURCE_PGURI` | none (required) | `--source` | all scripts |
 | `PGCOPYDB_TARGET_PGURI` | none (required) | `--target` | all scripts |
+| `PGCOPYDB_PRIMARY_PGURI` | unset | — | stop-cdc.sh (replica source only) |
 | `TABLE_JOBS` | 8 | `--table-jobs`, `--split-max-parts` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
 | `INDEX_JOBS` | 6 | `--index-jobs` | run-migration.sh, resume-migration.sh |
 | `SPLIT_TABLES_LARGER_THAN` | 50GB | `--split-tables-larger-than` | run-migration.sh, resume-migration.sh, resume-cdc.sh |
