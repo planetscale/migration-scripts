@@ -351,6 +351,36 @@ Diagnoses a stalled or slow COPY by inspecting live session, lock, and wait stat
 
 ---
 
+#### `check-source-speed.sh`
+
+Measures where the **source** database is spending its time. The counterpart to `check-copy-stall.sh`: use it when the copy is running, the migration instance and target are both idle, and throughput is still low.
+
+```bash
+~/check-source-speed.sh
+~/check-source-speed.sh --sample-secs 60   # longer sample for a steadier reading
+~/check-source-speed.sh --wire-test        # also measure per-connection network throughput
+```
+
+**Sections:**
+1. **Worker wait states** — histogram of source sessions by `wait_event_type`/`wait_event`. `IO/DataFileRead` means source storage is the ceiling; `Client/ClientWrite` means the source has data ready and waits on the network or consumer; `Lock`/`LWLock` means contention with the application workload; `(running)` means source CPU.
+2. **COPY throughput** — `pg_stat_progress_copy` byte delta over the sample window.
+3. **Source storage IO** — `pg_stat_io` (PG16+, falling back to `pg_stat_database.blks_read`) giving total IOPS, MB/s of block IO, and an implied per-read latency. Compare the IOPS against the provider's documented allowance.
+4. **Data expansion** — COPY output divided by physical reads. TOAST is compressed on disk and COPY output is not, so on-disk size understates the transfer. Projects wire volume and a full-copy time at the measured rate.
+5. **Largest tables** — heap vs TOAST per table, so a TOAST-dominant table is obvious.
+6. **Replication slot** — WAL retained on the source, and whether the slot is still active.
+7. **Connection headroom** — `max_connections` vs sessions in use, before raising `TABLE_JOBS`.
+8. **Network path** — RTT and retransmits from `ss` for the connections to the source host and port, plus an optional wire-throughput test.
+
+**Interpreting it:** A low per-connection rate with `IO/DataFileRead` on most workers is normal for TOAST-heavy data — each worker is latency-bound, waiting on round trips it cannot avoid. That parallelizes well *only* if the volume has IOPS headroom. Raise `TABLE_JOBS`, re-run, and compare section 3: if IOPS rises, keep going; if it stays flat, the storage is throughput-capped and the tier is the only lever. Section 4 matters when quoting a timeline — a 3-4x expansion factor is common for `text`/`jsonb`, so an estimate based on on-disk size can understate the job several-fold. A single table whose TOAST dwarfs its heap needs `SPLIT_TABLES_LARGER_THAN` to copy in parts; never use `--estimate-table-sizes` with such a table, because it sizes parts on heap alone and the table stops splitting.
+
+**When to use:** During the COPY phase when throughput is lower than expected and `check-copy-stall.sh` has ruled out the target.
+
+**Requires:** `PGCOPYDB_SOURCE_PGURI`
+
+**Read-only** — connects with `default_transaction_read_only=on`, a statement timeout, and a lock timeout; makes no modifications to the source. `--wire-test` streams ~500MB of generated data from the source and is off by default because it adds load.
+
+---
+
 #### `check-cdc-status.sh`
 
 Displays CDC-specific replication progress: apply and streaming LSN positions, backlog gap, apply rate, ETA to catch-up, and source replication slot health.

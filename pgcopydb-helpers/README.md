@@ -258,6 +258,14 @@ If a COPY looks stalled or unusually slow during the initial copy, diagnose why 
 
 It is read-only and reports whether anything is actually lock-blocked (usually nothing is — a COPY waiting in `ClientRead` is waiting on the source feed, not the target) and whether autovacuum is throttling throughput.
 
+If the target is clean and the migration instance is idle but throughput is still low, measure the source:
+
+```bash
+~/check-source-speed.sh
+```
+
+It reports what the source workers wait on, the source read rate in IOPS and MB/s, how much the data expands on the wire, and the health of the network path. Use it to decide whether raising `TABLE_JOBS` will help or whether the source storage is capped.
+
 Once the initial copy completes and CDC is streaming, check replication progress:
 
 ```bash
@@ -524,6 +532,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `start-migration-screen.sh` | Migrate | Run the migration in a detached screen session. |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
 | `check-copy-stall.sh` | Monitor | Diagnose a stalled/slow COPY on the target (locks, waits, vacuums, throughput) |
+| `check-source-speed.sh` | Monitor | Diagnose a slow COPY on the source (wait states, IOPS, data expansion, network) |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
 | `slack-migration-alerts.sh` | Monitor | Slack alerts |
 | `emergency-stop.sh` | Recovery | Immediately stop a running migration and all subprocesses |
