@@ -476,6 +476,16 @@ Every completed migration ends with a summary table showing wall clock and cumul
                           Total Wall Clock Duration         both      54m42s                        60
 ```
 
+To get a summary of the errors by category, run `check-log-errors.sh`. It groups the ERROR and FATAL lines into categories, for example `restore: POLICY`, `slot: missing`, and `connection`. For each category, it shows the count, the first and last time, and the most frequent messages. Quoted names and numbers are replaced, so the same error on many objects shows as one message:
+
+```bash
+~/check-log-errors.sh                        # newest ~/migration_*/migration.log
+~/check-log-errors.sh --since "2026-10-29 12:00"
+~/check-log-errors.sh --show "restore: POLICY"   # print the log lines for one category
+```
+
+`migration.log` keeps the output of all runs and resumes. Use `--since` to read only the most recent run.
+
 **Useful searches in the log:**
 
 - `grep ERROR migration.log` — find failures
@@ -525,6 +535,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
 | `check-copy-stall.sh` | Monitor | Diagnose a stalled/slow COPY on the target (locks, waits, vacuums, throughput) |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
+| `check-log-errors.sh` | Monitor | Group the errors in `migration.log` by category (restore object type, replication slot, connection, CDC) |
 | `slack-migration-alerts.sh` | Monitor | Slack alerts |
 | `emergency-stop.sh` | Recovery | Immediately stop a running migration and all subprocesses |
 | `resume-migration.sh` | Recovery | Resume an interrupted migration (full clone + CDC) |
