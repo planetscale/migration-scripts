@@ -41,15 +41,23 @@ LOG="$MIGRATION_DIR/migration.log"
 PROCS=$(pgrep -a pgcopydb 2>/dev/null || true)
 PROC_COUNT=$(echo "$PROCS" | grep -c pgcopydb 2>/dev/null || echo 0)
 
-# --- 2. Get apply LSN from sentinel (source of truth) + log fallback ---
+# --- 2. Get apply LSN from target replication origin, then sentinel, then log ---
 APPLY_LSN=""
 APPLY_FILE=""
+ORIGIN_LSN=""
+if [ -n "${PGCOPYDB_TARGET_PGURI:-}" ]; then
+    ORIGIN_LSN=$(psql "$PGCOPYDB_TARGET_PGURI" -t -A -c \
+        "SELECT remote_lsn FROM pg_replication_origin_status WHERE external_id = 'pgcopydb';" 2>/dev/null || true)
+fi
 SENTINEL_REPLAY_LSN=""
 if [ -f "$MIGRATION_DIR/schema/source.db" ]; then
     SENTINEL_REPLAY_LSN=$(sqlite3 "$MIGRATION_DIR/schema/source.db" \
         "SELECT replay_lsn FROM sentinel LIMIT 1;" 2>/dev/null || true)
 fi
-if [ -n "$SENTINEL_REPLAY_LSN" ] && [ "$SENTINEL_REPLAY_LSN" != "0/0" ]; then
+if [ -n "$ORIGIN_LSN" ] && [ "$ORIGIN_LSN" != "0/0" ]; then
+    APPLY_LSN="$ORIGIN_LSN"
+    APPLY_FILE="(from target replication origin)"
+elif [ -n "$SENTINEL_REPLAY_LSN" ] && [ "$SENTINEL_REPLAY_LSN" != "0/0" ]; then
     APPLY_LSN="$SENTINEL_REPLAY_LSN"
     APPLY_FILE="(from sentinel)"
 else

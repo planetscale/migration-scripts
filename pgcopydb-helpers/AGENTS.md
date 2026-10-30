@@ -360,7 +360,8 @@ Displays CDC-specific replication progress: apply and streaming LSN positions, b
 ```
 
 **Output includes:**
-- Apply LSN and streaming LSN (from sentinel SQLite DB)
+- Apply LSN from `pg_replication_origin_status` on the target, which updates on each applied transaction. Falls back to the sentinel `replay_lsn`, which updates only at SQL file boundaries, and then to the log
+- Streaming LSN (from sentinel SQLite DB)
 - Apply backlog in GB/MB
 - Apply rate (GB/hr) and estimated time to catch up
 - Source replication slot flush lag, restart lag, and WAL status
