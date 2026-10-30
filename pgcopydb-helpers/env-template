@@ -16,6 +16,10 @@ export PGCOPYDB_SOURCE_PGURI='postgresql://user:password@source-host:5432/dbname
 # Target database (PlanetScale).
 export PGCOPYDB_TARGET_PGURI='postgresql://user:password@target-host.connect.psdb.cloud:5432/dbname?sslmode=require'
 
+# Primary of the source, when the source is a replica (optional). stop-cdc.sh
+# waits for the replica to replay up to the primary flush LSN before it stops.
+#export PGCOPYDB_PRIMARY_PGURI='postgresql://user:password@primary-host:5432/dbname?sslmode=require'
+
 # ── Parallelism ───────────────────────────────────────────────────────────────
 
 # Parallel COPY workers. Keep this below the vCPU count of the smaller of the
