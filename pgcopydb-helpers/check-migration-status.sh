@@ -57,7 +57,7 @@ echo "Migration Directory: $MIGRATION_DIR"
 echo "Started: $START_TIME"
 echo ""
 
-RUNNING_PROCS=$(ps aux | grep "[p]gcopydb.*clone" | wc -l | xargs)
+RUNNING_PROCS=$(ps aux | grep -E "[p]gcopydb.*(clone|follow)" | wc -l | xargs)
 ALL_STEPS_DONE=false
 
 if [ -f "$LOG" ]; then

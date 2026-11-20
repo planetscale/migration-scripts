@@ -412,7 +412,14 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                # speci
 
 #### `start-resume-cdc-screen.sh`
 
-Runs `resume-cdc.sh` inside a detached screen session named `resume-cdc`, so CDC survives SSH disconnects. Kills any existing `resume-cdc` screen first.
+Runs `resume-cdc.sh` inside a detached screen session named `resume-cdc`, so CDC survives SSH disconnects.
+
+The script exits 1 and starts nothing in these cases:
+- `~/.env` or the migration directory is missing.
+- A `pgcopydb clone` or `pgcopydb follow` process is already running. Stop it with `emergency-stop.sh` first.
+- The `pgcopydb` replication slot on the source is active.
+
+After the start, the script waits 10 seconds. If `pgcopydb follow` is not running, it prints the end of `migration.log` and exits 1.
 
 ```bash
 ~/start-resume-cdc-screen.sh

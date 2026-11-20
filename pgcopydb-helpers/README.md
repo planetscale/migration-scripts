@@ -336,7 +336,7 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                    # o
 
 This runs `pgcopydb follow` directly (not `clone --follow`), skipping schema dump/restore, COPY, and index creation entirely. Use this when you know the data copy is complete and only CDC streaming needs to restart. Output is written to `migration.log` in the migration directory.
 
-To run the CDC resume in a detached screen session that survives SSH disconnects, use `~/start-resume-cdc-screen.sh`. Attach with `screen -r resume-cdc`.
+To run the CDC resume in a detached screen session that survives SSH disconnects, use `~/start-resume-cdc-screen.sh`. Attach with `screen -r resume-cdc`. The script does not start if pgcopydb is already running or the replication slot is in use. It exits 1 if `pgcopydb follow` is not running 10 seconds after the start.
 
 To start completely over, wipe the target and clean up replication:
 

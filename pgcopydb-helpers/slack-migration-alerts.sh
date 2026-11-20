@@ -177,7 +177,7 @@ fi
 
 # ── Current state from log ─────────────────────────────────────────
 PROC_RUNNING=false
-if ps aux | grep -q "[p]gcopydb.*clone"; then
+if ps aux | grep -qE "[p]gcopydb.*(clone|follow)"; then
     PROC_RUNNING=true
 fi
 
