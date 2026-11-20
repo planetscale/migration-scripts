@@ -334,13 +334,13 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/check-copy-progress.sh   # explicit 
 
 **Sections:**
 1. **pgcopydb list progress** — table and index counts from pgcopydb.
-2. **Running COPY tasks** — for each task: bytes sent, rows copied (`pg_stat_progress_copy` on the source), estimated rows (`EXPLAIN` on the task's `WHERE` clause), percent, rows/s, elapsed time, and ETA.
+2. **Running COPY tasks** — for each task: bytes sent, rows copied (`pg_stat_progress_copy` on the source, or on the target when the source is older than PostgreSQL 14), estimated rows (`EXPLAIN` on the task's `WHERE` clause), percent, rows/s, elapsed time, and ETA.
 3. **COPY tasks not started** — tables and split parts with no start time in the `summary` table.
 4. **Target size** — `pg_database_size` and the WAL size (`pg_ls_waldir()`, needs `pg_monitor`).
 
 **Why rows, not bytes:** pgcopydb splits integer-keyed tables into equal key ranges, not equal data sizes, and the last part has no upper bound. `s_table_size` is `pg_table_size()`, which includes compressed TOAST, while `summary.bytes` is uncompressed COPY text. On a large table with text columns, one part can send several times the on-disk size of the full table. The `Bytes` row of `pgcopydb list progress` has the same mix, so Done can be larger than Total.
 
-**Interpreting it:** `est_rows` is a planner estimate, so `pct` can pass 100% for a short time before a task finishes. The ETA uses the average row rate since the task started. A `-` in `copied` means the source session is not visible to the connecting role.
+**Interpreting it:** `est_rows` is a planner estimate, so `pct` can pass 100% for a short time before a task finishes. The ETA uses the average row rate since the task started. The script finds the COPY session for each task by its `application_name`, which pgcopydb sets to `pgcopydb[<worker pid>] ...`. A `-` in `copied` means no COPY session for the worker was found on the source or the target. `stopped` means the worker process for the task is not running; if all tasks show `stopped`, pgcopydb is down.
 
 **When to use:** During the COPY phase, when a large table or split part runs for a long time and you need to know how much is left.
 

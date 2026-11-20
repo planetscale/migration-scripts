@@ -81,6 +81,14 @@ sql() { sqlite3 -readonly -separator $'\x1f' "$SOURCE_DB" "$1"; }
 # :'var' variables, which -c does not do.
 PGOPTS='-c default_transaction_read_only=on -c statement_timeout=30000 -c lock_timeout=5000'
 src_scalar() { PGOPTIONS="$PGOPTS" psql "$PGCOPYDB_SOURCE_PGURI" -X -q -t -A "$@" 2>/dev/null || echo ""; }
+tgt_scalar() { PGOPTIONS="$PGOPTS" psql "$PGCOPYDB_TARGET_PGURI" -X -q -t -A "$@" 2>/dev/null || echo ""; }
+
+COPY_PROGRESS_SQL="SELECT p.tuples_processed
+FROM pg_stat_progress_copy p
+JOIN pg_stat_activity a USING (pid)
+WHERE p.command = :'command'
+  AND a.application_name LIKE 'pgcopydb[' || :'pid' || ']%'
+LIMIT 1;"
 
 human_rows() { awk -v n="$1" 'BEGIN { if (n >= 1e9) printf "%.2fB", n/1e9; else if (n >= 1e6) printf "%.1fM", n/1e6; else if (n >= 1e3) printf "%.1fK", n/1e3; else printf "%d", n }'; }
 human_secs() { awk -v s="$1" 'BEGIN { s = int(s); printf "%dh%02dm", s/3600, (s%3600)/60 }'; }
@@ -110,9 +118,6 @@ echo "────────────────────────�
 echo "2. RUNNING COPY TASKS  (rows copied vs planner estimate, source)"
 echo "────────────────────────────────────────────────────────────────"
 
-# summary.command is "COPY <qname>[ <where clause>]", and the source COPY
-# query is "copy (SELECT ... FROM ONLY <qname>[ <where clause>]) to stdout",
-# so the WHERE clause both finds the source session and feeds EXPLAIN.
 RUNNING_TASKS=$(sql "
     SELECT t.qname,
            CASE WHEN coalesce(p.partcount, 1) > 1 THEN s.partnum || '/' || p.partcount ELSE '-' END,
@@ -137,30 +142,26 @@ else
     # shellcheck disable=SC2059
     printf "$FMT" "--------------------------------" "------" "-------" "----------" "----------" "----------" "------" "---------" "--------" "---------"
 
+    TASK_COUNT=0; STOPPED_COUNT=0; COPIED_FROM_TARGET=false
     while IFS=$'\x1f' read -r QNAME PART PID SENT ELAPSED WHERE; do
         [ -z "$QNAME" ] && continue
 
-        if [ -n "$WHERE" ]; then
-            NEEDLE="FROM ONLY $QNAME $WHERE)"
+        COPIED=""; COPIED_H="-"; EST_H="-"; PCT="-"; RATE="-"; ETA="-"
+        TASK_COUNT=$((TASK_COUNT + 1))
+        if ! ps -p "$PID" -o args= 2>/dev/null | grep -q pgcopydb; then
+            STOPPED_COUNT=$((STOPPED_COUNT + 1))
+            COPIED_H="stopped"
         else
-            NEEDLE="FROM ONLY $QNAME)"
+            COPIED=$(src_scalar -v pid="$PID" -v command='COPY TO' <<<"$COPY_PROGRESS_SQL")
+            if [ -z "$COPIED" ] && [ -n "${PGCOPYDB_TARGET_PGURI:-}" ]; then
+                COPIED=$(tgt_scalar -v pid="$PID" -v command='COPY FROM' <<<"$COPY_PROGRESS_SQL")
+                [ -n "$COPIED" ] && COPIED_FROM_TARGET=true
+            fi
         fi
-
-        COPIED=$(src_scalar -v needle="$NEEDLE" <<'SQL'
-SELECT p.tuples_processed
-FROM pg_stat_progress_copy p
-JOIN pg_stat_activity a USING (pid)
-WHERE p.command = 'COPY TO'
-  AND strpos(a.query, :'needle') > 0
-ORDER BY a.query_start
-LIMIT 1;
-SQL
-)
         EST=$(src_scalar <<<"EXPLAIN (FORMAT JSON) SELECT 1 FROM ONLY $QNAME $WHERE;" \
               | grep -o '"Plan Rows": *[0-9]*' | head -1 | grep -o '[0-9]*$' || true)
 
         SENT_GB=$(awk -v b="$SENT" 'BEGIN { printf "%.1f GB", b / 1073741824 }')
-        COPIED_H="-"; EST_H="-"; PCT="-"; RATE="-"; ETA="-"
         [ -n "$EST" ] && EST_H=$(human_rows "$EST")
         if [ -n "$COPIED" ]; then
             COPIED_H=$(human_rows "$COPIED")
@@ -180,9 +181,19 @@ SQL
     done <<<"$RUNNING_TASKS"
 
     echo ""
-    echo "  copied: rows the source COPY has sent (pg_stat_progress_copy)."
+    if [ "$STOPPED_COUNT" -gt 0 ] && [ "$STOPPED_COUNT" -eq "$TASK_COUNT" ]; then
+        echo -e "${RED}✗ pgcopydb is not running. The tasks above were in progress when it stopped.${NC}"
+        echo ""
+    elif [ "$STOPPED_COUNT" -gt 0 ]; then
+        echo -e "${YELLOW}  $STOPPED_COUNT task(s) show 'stopped': the pgcopydb worker for the task is not running.${NC}"
+        echo ""
+    fi
+    echo "  copied: rows the source COPY has sent (pg_stat_progress_copy, PostgreSQL 14+)."
+    if [ "$COPIED_FROM_TARGET" = true ]; then
+        echo "  Some copied values are rows written on the target, because the source has no COPY progress."
+    fi
     echo "  est_rows: planner estimate for the part's WHERE clause (EXPLAIN)."
-    echo "  '-' in copied means the source session is not visible to this role."
+    echo "  '-' in copied means no COPY session for the worker was found on the source or the target."
     echo "  eta assumes the average row rate since the task started."
 fi
 echo ""
