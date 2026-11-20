@@ -143,10 +143,10 @@ function toc_object_type(s,    i, n, w, t) {
 function command_type(s,    i, n, w, t, k) {
     sub(/^[ \t]+/, "", s)
     if (s ~ /^CREATE POLICY/) return "POLICY"
-    if (s ~ /FOREIGN KEY/) return "FK CONSTRAINT"
-    if (s ~ /ADD CONSTRAINT/) return "CONSTRAINT"
-    if (s ~ /ROW LEVEL SECURITY/) return "ROW SECURITY"
-    if (s ~ /OWNER TO/) return "OWNER"
+    if (s ~ /^ALTER TABLE[^;]* FOREIGN KEY/) return "FK CONSTRAINT"
+    if (s ~ /^ALTER TABLE[^;]* ADD CONSTRAINT/) return "CONSTRAINT"
+    if (s ~ /^ALTER TABLE[^;]* ROW LEVEL SECURITY/) return "ROW SECURITY"
+    if (s ~ /^ALTER [^;]* OWNER TO/) return "OWNER"
     if (s ~ /^ALTER DEFAULT PRIVILEGES/) return "DEFAULT ACL"
     if (s ~ /^(GRANT|REVOKE)/) return "ACL"
     if (s ~ /^COMMENT ON/) return "COMMENT"
