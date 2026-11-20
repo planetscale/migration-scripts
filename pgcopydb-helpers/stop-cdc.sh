@@ -3,7 +3,7 @@
 # Usage: ~/stop-cdc.sh
 # Example: MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/stop-cdc.sh
 #
-# Fetches the current WAL LSN from the source, asks for confirmation,
+# Fetches the current WAL LSN (replay LSN on a replica) from the source, asks for confirmation,
 # then sets the CDC endpos sentinel so pgcopydb stops streaming after
 # reaching that LSN. Uses MIGRATION_DIR env var if set,
 # otherwise the most recent ~/migration_*/ directory.
@@ -28,9 +28,87 @@ if [ -z "${PGCOPYDB_SOURCE_PGURI:-}" ] || [ -z "${PGCOPYDB_TARGET_PGURI:-}" ]; t
 fi
 # --- loaded ---
 
-echo "Fetching current WAL LSN from source..."
-ENDPOS_LSN=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();")
+IN_RECOVERY=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_is_in_recovery();")
 PSQL_RC=$?
+if [ "$PSQL_RC" -ne 0 ] || [ -z "$IN_RECOVERY" ]; then
+    echo "ERROR: Failed to query source database"
+    exit 1
+fi
+
+if [ "$IN_RECOVERY" = "t" ]; then
+    echo "Source is a replica (in recovery)."
+    if [ -z "${PGCOPYDB_PRIMARY_PGURI:-}" ]; then
+        echo "ERROR: The source is a replica and PGCOPYDB_PRIMARY_PGURI is not set."
+        echo "Set PGCOPYDB_PRIMARY_PGURI in ~/.env to the primary of the source, then run this script again."
+        exit 1
+    fi
+
+    SOURCE_SYSID=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT system_identifier FROM pg_control_system();")
+    PSQL_RC=$?
+    if [ "$PSQL_RC" -ne 0 ] || [ -z "$SOURCE_SYSID" ]; then
+        echo "ERROR: Failed to read system_identifier from the source"
+        exit 1
+    fi
+
+    PRIMARY_INFO=$(psql "$PGCOPYDB_PRIMARY_PGURI" -t -A -F ' ' \
+        -c "SELECT pg_is_in_recovery(), system_identifier FROM pg_control_system();")
+    PSQL_RC=$?
+    if [ "$PSQL_RC" -ne 0 ] || [ -z "$PRIMARY_INFO" ]; then
+        echo "ERROR: Failed to query the primary"
+        exit 1
+    fi
+    read -r PRIMARY_IN_RECOVERY PRIMARY_SYSID <<< "$PRIMARY_INFO"
+
+    if [ "$PRIMARY_IN_RECOVERY" != "f" ]; then
+        echo "ERROR: PGCOPYDB_PRIMARY_PGURI points at a server in recovery, not at the primary."
+        exit 1
+    fi
+    if [ "$PRIMARY_SYSID" != "$SOURCE_SYSID" ]; then
+        echo "ERROR: PGCOPYDB_PRIMARY_PGURI is not the primary of the source."
+        echo "  Source system_identifier:  $SOURCE_SYSID"
+        echo "  Primary system_identifier: $PRIMARY_SYSID"
+        exit 1
+    fi
+
+    PRIMARY_LSN=$(psql "$PGCOPYDB_PRIMARY_PGURI" -t -A -c "SELECT pg_current_wal_flush_lsn();")
+    PSQL_RC=$?
+    if [ "$PSQL_RC" -ne 0 ] || [ -z "$PRIMARY_LSN" ]; then
+        echo "ERROR: Failed to fetch LSN from primary"
+        exit 1
+    fi
+
+    echo "Primary flush LSN: $PRIMARY_LSN"
+    echo "Waiting for the replica to replay up to it (Ctrl-C to abort)..."
+    while true; do
+        REPLAY_INFO=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -F ' ' \
+            -c "SELECT coalesce(pg_last_wal_replay_lsn() >= '$PRIMARY_LSN'::pg_lsn, false), pg_is_wal_replay_paused(), coalesce(pg_last_wal_replay_lsn()::text, 'none');")
+        PSQL_RC=$?
+        if [ "$PSQL_RC" -ne 0 ] || [ -z "$REPLAY_INFO" ]; then
+            echo "ERROR: Failed to read the replay LSN from the replica"
+            exit 1
+        fi
+        read -r CAUGHT_UP REPLAY_PAUSED REPLAY_LSN <<< "$REPLAY_INFO"
+        if [ "$CAUGHT_UP" = "t" ]; then
+            break
+        fi
+        if [ "$REPLAY_PAUSED" = "t" ]; then
+            echo "ERROR: WAL replay is paused on the replica at $REPLAY_LSN."
+            echo "Resume replay with: SELECT pg_wal_replay_resume(); then run this script again."
+            exit 1
+        fi
+        echo "  Replica replay LSN: $REPLAY_LSN (waiting for $PRIMARY_LSN)"
+        sleep 2
+    done
+    echo "Replica caught up."
+    echo "Fetching replay LSN from the replica..."
+    ENDPOS_LSN=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_last_wal_replay_lsn();")
+    PSQL_RC=$?
+else
+    echo "Fetching current WAL LSN from source..."
+    ENDPOS_LSN=$(psql "$PGCOPYDB_SOURCE_PGURI" -t -A -c "SELECT pg_current_wal_lsn();")
+    PSQL_RC=$?
+fi
+
 if [ "$PSQL_RC" -ne 0 ] || [ -z "$ENDPOS_LSN" ]; then
     echo "ERROR: Failed to fetch LSN from source database"
     exit 1
