@@ -250,6 +250,14 @@ Check overall migration progress (copy, indexes, constraints, vacuum) and see ac
 ~/check-migration-status.sh
 ```
 
+To see how much data is left for each running COPY task, in rows copied against the planner's row estimate on the source:
+
+```bash
+~/check-copy-progress.sh
+```
+
+Use rows, not bytes, to judge a large table. Split parts are equal key ranges, not equal data sizes, and COPY text is uncompressed while `pg_table_size()` includes compressed TOAST.
+
 If a COPY looks stalled or unusually slow during the initial copy, diagnose why on the target — blocking locks, wait events, competing vacuums, and whether data is still landing:
 
 ```bash
@@ -523,6 +531,7 @@ sqlite3 ~/migration_*/schema/filter.db "SELECT COUNT(*) FROM s_depend;"
 | `run-migration.sh` | Migrate | Start a pgcopydb clone --follow migration |
 | `start-migration-screen.sh` | Migrate | Run the migration in a detached screen session. |
 | `check-migration-status.sh` | Monitor | Migration progress dashboard |
+| `check-copy-progress.sh` | Monitor | Rows copied, row estimate, and ETA for each running COPY task (table or split part) |
 | `check-copy-stall.sh` | Monitor | Diagnose a stalled/slow COPY on the target (locks, waits, vacuums, throughput) |
 | `check-cdc-status.sh` | Monitor | CDC replication progress and health |
 | `slack-migration-alerts.sh` | Monitor | Slack alerts |
