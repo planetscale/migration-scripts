@@ -410,6 +410,29 @@ MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/resume-cdc.sh                # speci
 
 ---
 
+#### `start-resume-cdc-screen.sh`
+
+Runs `resume-cdc.sh` inside a detached screen session named `resume-cdc`, so CDC survives SSH disconnects.
+
+The script exits 1 and starts nothing in these cases:
+- `~/.env` or the migration directory is missing.
+- A `pgcopydb clone` or `pgcopydb follow` process is already running. Stop it with `emergency-stop.sh` first.
+- The `pgcopydb` replication slot on the source is active.
+
+After the start, the script waits 10 seconds. If `pgcopydb follow` is not running, it prints the end of `migration.log` and exits 1.
+
+```bash
+~/start-resume-cdc-screen.sh
+MIGRATION_DIR=~/migration_YYYYMMDD-HHMMSS ~/start-resume-cdc-screen.sh   # specify explicitly
+screen -r resume-cdc                                                     # attach; Ctrl-A D to detach
+```
+
+**When to use:** In place of `resume-cdc.sh` when you resume CDC from an SSH session.
+
+**Requires:** the same as `resume-cdc.sh`
+
+---
+
 #### `target-clean.sh`
 
 Wipes all user objects from the target database for a fresh re-migration. Shows a summary of what will be dropped and prompts for confirmation.
